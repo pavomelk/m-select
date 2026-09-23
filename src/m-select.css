@@ -1,0 +1,251 @@
+:root {
+  --cm-border-color: #9aa4b1;
+  --cm-border-color-focus: #2563eb;
+  --cm-radius: 6px;
+  --cm-gap: 6px;
+  --cm-pad: 6px;
+  --cm-text: #1f2937;
+  --cm-bg: #ffffff;
+  --cm-selected-bg: #e0f2fe;
+  --cm-current-bg: #dbeafe;
+  --cm-current-outline: #2563eb;
+  --cm-inactive-opacity: 0.45;
+  --cm-group-color: #475569;
+  --cm-tick-color: #16a34a;
+  --cm-tick-partial-opacity: 0.4;
+  --cm-remove-color: #b91c1c;
+  --cm-font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.cm-select {
+  position: relative;
+  display: inline-block;
+  font: 14px/1.4 var(--cm-font);
+  color: var(--cm-text);
+}
+
+.cm-select * {
+  box-sizing: border-box;
+}
+
+.cm-selection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cm-gap);
+  min-width: 260px;
+  max-width: 480px;
+  padding: var(--cm-pad);
+  border: 1px solid var(--cm-border-color);
+  border-radius: var(--cm-radius);
+  background: var(--cm-bg);
+  cursor: text;
+}
+
+.cm-selection:focus-within {
+  border-color: var(--cm-border-color-focus);
+}
+
+.cm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cm-gap);
+}
+
+.cm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 12px;
+  background: var(--cm-selected-bg);
+  border: 1px solid transparent;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.cm-chip--current {
+  background: var(--cm-current-bg);
+  outline: 2px solid var(--cm-current-outline);
+  outline-offset: 1px;
+}
+
+.cm-chip--summary {
+  background: var(--cm-group-color);
+  color: #fff;
+}
+
+.cm-chip__x {
+  width: 14px;
+  height: 14px;
+  line-height: 12px;
+  text-align: center;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--cm-remove-color);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cm-chip__x:hover {
+  background: rgba(185, 28, 28, 0.15);
+}
+
+.cm-filter {
+  flex: 1 1 120px;
+  min-width: 90px;
+  border: none;
+  outline: none;
+  font: inherit;
+  color: inherit;
+  padding: 2px 0;
+  background: transparent;
+}
+
+.cm-clear {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--cm-remove-color);
+  padding: 2px 4px;
+  border-radius: var(--cm-radius);
+}
+
+.cm-clear:hover {
+  background: rgba(185, 28, 28, 0.1);
+}
+
+.cm-dropdown {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 100%;
+  max-width: 340px;
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--cm-border-color);
+  border-radius: var(--cm-radius);
+  background: var(--cm-bg);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+  display: none;
+}
+
+.cm-dropdown--open {
+  display: block;
+}
+
+.cm-dropdown__toolbar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--cm-pad);
+  background: var(--cm-bg);
+  border-bottom: 1px solid var(--cm-border-color);
+}
+
+.cm-dropdown__select-all {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  border: 1px solid var(--cm-border-color);
+  border-radius: var(--cm-radius);
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.cm-dropdown__select-all:hover {
+  background: var(--cm-selected-bg);
+}
+
+/* Item tree. Level containers can be rows or columns per `align` option. */
+.cm-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+}
+
+.cm-item {
+  display: block;
+  cursor: default;
+  border-radius: var(--cm-radius);
+}
+
+.cm-item:hover {
+  background: #f1f5f9;
+}
+
+.cm-item--unselectable {
+  opacity: var(--cm-inactive-opacity);
+  cursor: not-allowed;
+}
+
+.cm-item--current {
+  outline: 2px solid var(--cm-current-outline);
+  outline-offset: -2px;
+  background: var(--cm-current-bg);
+}
+
+.cm-item--selected {
+  background: var(--cm-selected-bg);
+}
+
+.cm-item--selected .cm-item__label {
+  font-weight: 600;
+}
+
+.cm-item--partial {
+  background: var(--cm-selected-bg);
+  opacity: 0.75;
+}
+
+.cm-item__row {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-gap);
+  padding: 3px var(--cm-pad);
+}
+
+.cm-item__tick {
+  width: 14px;
+  text-align: center;
+  color: var(--cm-tick-color);
+  font-weight: 700;
+  flex: 0 0 14px;
+}
+
+.cm-item__tick--partial {
+  opacity: var(--cm-tick-partial-opacity);
+}
+
+.cm-item__label {
+  flex: 1 1 auto;
+}
+
+.cm-item--group > .cm-item__row {
+  color: var(--cm-group-color);
+  font-weight: 600;
+}
+
+.cm-item__children {
+  display: flex;
+  flex-direction: column;
+  margin-left: 18px;
+  border-left: 1px dashed var(--cm-border-color);
+  padding-left: 6px;
+}
+
+.cm-item__children--row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  border-left: none;
+  margin-left: 14px;
+  padding-left: 0;
+}
+
+.cm-item--hidden {
+  display: none;
+}

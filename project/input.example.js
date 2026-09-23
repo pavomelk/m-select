@@ -82,10 +82,10 @@ export const inputExample = {
             toggleScope: 'all',
             /**
              * When Group Item label matches filter criterion all its children remain
-             * visible ('subtree', default) otherwise only Child Items that match 
-             * filtering criteria become visible ('node')
+             * visible ('all', default) otherwise only Child Items that match 
+             * filtering criteria become visible ('matching')
              */
-            filterScope: 'node',
+            filterScope: 'matching',
         },
         /**
          * Maximum number of selected Items shown as their own individual Chips

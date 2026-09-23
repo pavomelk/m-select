@@ -7,4 +7,8 @@ export default defineConfig({
   build: {
     minify: false,
   },
+  test: {
+    environment: 'node',
+    setupFiles: ['./test/dom-stub.js'],
+  },
 });

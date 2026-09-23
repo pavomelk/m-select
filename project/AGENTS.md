@@ -30,9 +30,12 @@
 - JavaScript
 
 ## Testing
-- **Vitest** for unit tests, using happy-dom.
-- Write Vitest tests. Use happy-dom.
-- Maintain hierarchical test numbering. Numbering scheme to be clarified later.
+- **Vitest** for unit tests.
+- Use `environment: 'node'` with the minimal DOM stub in `test/dom-stub.js` for speed (happy-dom's import is ~15 s on this machine). Use happy-dom only if a test genuinely needs a full browser DOM.
+- Maintain hierarchical test numbering:
+  - Test files are numbered by area: `01_<area>.test.js`, `02_<area>.test.js`, …
+  - Inside a file, `describe` levels are numbered (`1. …`, `1.1 …`, …) and each `it` gets the full hierarchical number (`1.1.1 …`).
+  - Assign a new number whenever a new area or behavior is covered; never reuse a number.
 
 ## Code quality
 - ESLint
@@ -73,4 +76,3 @@ m-select/
 
 ## Open items to be clarified
 - Detailed component requirements (to be added to requirements.md).
-- Hierarchical test numbering scheme.

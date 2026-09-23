@@ -163,6 +163,9 @@
 - [ ] `REQ-7-12` The component respects the order of *Items* in which they were created or passed during instantiation. *(P0)*
 - [ ] `REQ-7-13` *Chips* are placed in the order specified by options: selection order (last selected appended to the end) / definition order / alphabetical. *(P1)*
 - [ ] `REQ-7-14` The API provides methods for removing *Items* and adding them back at any place within the existing *Items* hierarchy. *(P0)*
+- [ ] `REQ-7-15` **Lazy loading of Items.** The component must not instantiate the *Item* tree eagerly at construction. *Items* are instantiated upon the component receiving focus for the first time; this happens at most once per component instance (subsequent focus does not re-instantiate). *(TBD — new requirement)*
+  - Cross-refs: REQ-6-04 (programmatic selection before first focus), REQ-7-06 (Items created at runtime), REQ-3.7-02 (Selection Box always visible yet Items not yet created).
+  - Detail needed: see section 11.
 
 ---
 
@@ -197,3 +200,10 @@
 - Herarchical numbering scheme for tests (TBD).
 - Detailed logger design (8).
 - Additional requirements promised by author ("More detailed requirements will come").
+- **REQ-7-15 (lazy loading) — detail before implementing:**
+  - What exactly counts as "component receiving focus": DOM `focus`/`focusin` on the control root, on the *Filter* input, or any interactive part? Does *Drop Down* opening (click on *Selection Box*) count if it happens without a prior focus event?
+  - What is instantiated: only the tree of *Item* objects (model), or also the *Drop Down* DOM? Is instantiation once, or once per branch (children built when a *Group Item* is first expanded)?
+  - How does the always-visible *Selection Box* display chips for pre-set values (REQ-6-04) before first focus, given chips are derived from *Items*? Options: (a) preset selection triggers instantiation, (b) chips built from raw config values until first focus, (c) no chips until first focus (likely wrong).
+  - Where are programmatic calls made before first focus buffered (add/remove/select) and when are they flushed — at instantiation, or does calling them force instantiation?
+  - Interaction with REQ-7-06: are runtime-added *Items* applied to the lazy structure (create-on-demand or post-instantiation), and does adding an item before first focus force instantiation?
+  - Performance intent: is this for many items (avoid upfront cost on page load), or for deferred network/data source? Affects whether the source may be a lazy `resolveItems()` callback rather than a static array.

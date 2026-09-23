@@ -19,6 +19,7 @@ Component should produce events upon basic user actions: toggle, leave, opening 
 Component should respect order of items in which they where created or passed during instantiation.
 Component should place Chips in the order specified by options: as they are being selected by user, meaning the last selected item should be added to the end of the list of Chips in Selection Box; or in order how they were defined during instantiation; or alphabetically.
 Components API should provide methods for removing Items and adding them back in any place within existing Items hierarchy.
+Component should support lazy loading and postpone instantiation of Items to the time of receiving focus first time.
 
 
 
