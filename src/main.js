@@ -33,4 +33,3 @@ reflect();
 
 app.append(state);
 
-export { control };

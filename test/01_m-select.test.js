@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { MSelect, Item, Items } from '../src/m-select.js';
+import { describe, expect, it, vi } from 'vitest';
+import { MSelect, Item, Items, Filter } from '../src/m-select.js';
 
 describe('1. MSelect', () => {
   describe('1. Items', () => {
@@ -433,6 +433,43 @@ describe('1. MSelect', () => {
       expect(group.children.at(0).visible).toBe(true);
       expect(group.children.at(1).visible).toBe(true);
     });
+
+    it('1.6.4 a matching child keeps all of its parent Items visible', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          {
+            label: 'Root Group',
+            items: [
+              {
+                label: 'Sub Group',
+                items: [
+                  { value: 'alpha', label: 'Alpha' },
+                  { value: 'beta', label: 'Beta' },
+                ],
+              },
+              { value: 'gamma', label: 'Gamma' },
+            ],
+          },
+        ],
+      });
+
+      const dropDown = control.dropDown;
+      const root = control.items.at(0);
+      const sub = root.children.at(0);
+
+      dropDown.filter('alpha');
+
+      expect(sub.children.at(0).visible).toBe(true);
+      expect(sub.visible).toBe(true);
+      expect(root.visible).toBe(true);
+
+      dropDown.filter('gamma');
+
+      expect(root.children.at(1).visible).toBe(true);
+      expect(root.visible).toBe(true);
+      expect(sub.visible).toBe(false);
+    });
   });
 
   describe('7. Group Item toggling', () => {
@@ -637,6 +674,527 @@ describe('1. MSelect', () => {
       control.setChipPlaceOrder('asDefined');
       control.selectionBox.render();
       expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Charlie', 'Alpha', 'Bravo']);
+    });
+  });
+
+  describe('9. Chip movement - Current marker', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { chipPlaceOrder: 'asDefined' },
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+      control.items.list.forEach((item) => item.toggle(true));
+      control.selectionBox.render();
+      return control;
+    };
+
+    const currentItems = (control) => control.items.selectableItems.filter((i) => i.current);
+
+    it('1.9.1 selectFirst marks the first chip Item as current (itemView + chipView)', () => {
+      const control = setup();
+      control.selectionBox.selectFirst();
+
+      expect(control.items.at(0).current).toBe(true);
+      expect(control.items.at(0).itemView.classList.contains('cm-item--current')).toBe(true);
+      expect(control.items.at(0).chipView.classList.contains('cm-chip--current')).toBe(true);
+      expect(control.items.at(1).current).toBe(false);
+      expect(control.items.at(2).current).toBe(false);
+    });
+
+    it('1.9.2 selectLast marks the last chip Item as current', () => {
+      const control = setup();
+      control.selectionBox.selectLast();
+
+      expect(control.items.at(2).current).toBe(true);
+      expect(control.items.at(2).itemView.classList.contains('cm-item--current')).toBe(true);
+      expect(control.items.at(2).chipView.classList.contains('cm-chip--current')).toBe(true);
+    });
+
+    it('1.9.3 selectNext moves current from the previous marker to the next chip Item', () => {
+      const control = setup();
+      control.selectionBox.selectFirst();
+      control.selectionBox.selectNext();
+
+      expect(control.items.at(0).current).toBe(false);
+      expect(control.items.at(1).current).toBe(true);
+      expect(control.items.at(1).chipView.classList.contains('cm-chip--current')).toBe(true);
+
+      control.selectionBox.selectNext();
+      expect(control.items.at(1).current).toBe(false);
+      expect(control.items.at(2).current).toBe(true);
+    });
+
+    it('1.9.4 selectPrevious moves current from the previous marker to the previous chip Item', () => {
+      const control = setup();
+      control.selectionBox.selectLast();
+      control.selectionBox.selectPrevious();
+
+      expect(control.items.at(2).current).toBe(false);
+      expect(control.items.at(1).current).toBe(true);
+      expect(control.items.at(1).itemView.classList.contains('cm-item--current')).toBe(true);
+    });
+
+    it('1.9.5 selectNext after the last chip wraps to the first chip Item', () => {
+      const control = setup();
+      control.selectionBox.selectLast();
+      control.selectionBox.selectNext();
+
+      expect(control.items.at(0).current).toBe(true);
+      expect(control.items.at(2).current).toBe(false);
+    });
+
+    it('1.9.6 selectPrevious before the first chip wraps to the last chip Item', () => {
+      const control = setup();
+      control.selectionBox.selectFirst();
+      control.selectionBox.selectPrevious();
+
+      expect(control.items.at(2).current).toBe(true);
+      expect(control.items.at(0).current).toBe(false);
+    });
+
+    it('1.9.7 only one Item is current at a time', () => {
+      const control = setup();
+      control.selectionBox.selectNext();
+      control.selectionBox.selectNext();
+      control.selectionBox.selectPrevious();
+
+      expect(currentItems(control)).toHaveLength(1);
+    });
+
+    it('1.9.8 removing a chip clears the current marker if it pointed at the removed Item', () => {
+      const control = setup();
+      const item = control.items.at(0);
+      control.selectionBox.selectFirst();
+      expect(item.current).toBe(true);
+
+      control.selectionBox.remove(item);
+      expect(item.current).toBe(false);
+    });
+
+    it('1.9.9 no Item is current when the control is created', () => {
+      const control = setup();
+
+      expect(currentItems(control)).toHaveLength(0);
+      expect(control.dropDown.currentItem).toBe(null);
+    });
+
+    it('1.9.10 reassigning DropDown.currentItem marks only the new Item as current', () => {
+      const control = setup();
+      control.dropDown.currentItem = control.items.at(0);
+
+      expect(control.dropDown.currentItem).toBe(control.items.at(0));
+      expect(control.items.at(0).current).toBe(true);
+
+      control.dropDown.currentItem = control.items.at(1);
+
+      expect(control.dropDown.currentItem).toBe(control.items.at(1));
+      expect(control.items.at(1).current).toBe(true);
+      expect(control.items.at(0).current).toBe(false);
+      expect(control.items.at(2).current).toBe(false);
+    });
+  });
+
+  describe('10. DropDown - scroll current into view', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+          { value: 'd', label: 'Delta' },
+        ],
+      });
+      return control;
+    };
+
+    it('1.10.1 assigning currentItem while open scrolls its itemView into view', () => {
+      const control = setup();
+      control.dropDown.open();
+
+      control.dropDown.currentItem = control.items.at(2);
+
+      expect(control.dropDown.currentItem).toBe(control.items.at(2));
+      expect(control.items.at(2).itemView.scrollIntoViewCalls).toBe(1);
+    });
+
+    it('1.10.2 assigning currentItem while closed does not scroll', () => {
+      const control = setup();
+      control.dropDown.close();
+
+      control.dropDown.currentItem = control.items.at(1);
+
+      expect(control.dropDown.currentItem).toBe(control.items.at(1));
+      expect(control.items.at(1).itemView.scrollIntoViewCalls).toBe(0);
+    });
+
+    it('1.10.3 changing currentItem while open scrolls only the newly current itemView', () => {
+      const control = setup();
+      control.dropDown.open();
+
+      control.dropDown.currentItem = control.items.at(0);
+      control.dropDown.currentItem = control.items.at(2);
+
+      expect(control.items.at(0).itemView.scrollIntoViewCalls).toBe(1);
+      expect(control.items.at(2).itemView.scrollIntoViewCalls).toBe(1);
+      expect(control.items.at(1).itemView.scrollIntoViewCalls).toBe(0);
+    });
+
+    it('1.10.4 opening the DropDown scrolls the already assigned currentItem into view', () => {
+      const control = setup();
+      control.dropDown.currentItem = control.items.at(3);
+
+      control.dropDown.open();
+
+      expect(control.items.at(3).itemView.scrollIntoViewCalls).toBe(1);
+    });
+  });
+
+  describe('11. Item tree navigation', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { label: 'Fruit', items: [{ value: 'apple', label: 'Apple' }, { value: 'pear', label: 'Pear' }] },
+          { value: 'meat', label: 'Meat' },
+          { value: 'veggie', label: 'Vegetables' },
+        ],
+      });
+    };
+
+    it('1.11.1 Item.parent points to the containing Group Item or null at the root', () => {
+      const control = setup();
+
+      const fruit = control.items.at(0);
+      const meat = control.items.at(1);
+
+      expect(fruit.parent).toBe(null);
+      expect(meat.parent).toBe(null);
+      expect(fruit.children.at(0).parent).toBe(fruit);
+      expect(fruit.children.at(1).parent).toBe(fruit);
+    });
+
+    it('1.11.2 Item.nextSibling returns the next sibling or null for the last', () => {
+      const control = setup();
+
+      const fruit = control.items.at(0);
+      const meat = control.items.at(1);
+      const veggie = control.items.at(2);
+
+      expect(fruit.nextSibling).toBe(meat);
+      expect(meat.nextSibling).toBe(veggie);
+      expect(veggie.nextSibling).toBe(null);
+
+      const apple = fruit.children.at(0);
+      const pear = fruit.children.at(1);
+      expect(apple.nextSibling).toBe(pear);
+      expect(pear.nextSibling).toBe(null);
+    });
+
+    it('1.11.3 Item.previousSibling returns the previous sibling or null for the first', () => {
+      const control = setup();
+
+      const fruit = control.items.at(0);
+      const veggie = control.items.at(2);
+
+      expect(fruit.previousSibling).toBe(null);
+      expect(veggie.previousSibling).toBe(control.items.at(1));
+    });
+
+    it('1.11.4 Item.firstSibling / lastSibling return the boundaries of the sibling set', () => {
+      const control = setup();
+
+      const fruit = control.items.at(0);
+      const meat = control.items.at(1);
+      const veggie = control.items.at(2);
+
+      expect(fruit.firstSibling).toBe(fruit);
+      expect(meat.firstSibling).toBe(fruit);
+      expect(veggie.firstSibling).toBe(fruit);
+
+      expect(veggie.lastSibling).toBe(veggie);
+      expect(fruit.lastSibling).toBe(veggie);
+    });
+
+    it('1.11.5 sibling navigation reflects the tree order including Group children', () => {
+      const control = setup();
+      const fruit = control.items.at(0);
+
+      expect(fruit.children.at(0).firstSibling).toBe(fruit.children.at(0));
+      expect(fruit.children.at(1).lastSibling).toBe(fruit.children.at(1));
+      expect(fruit.lastSibling).toBe(control.items.at(2));
+    });
+  });
+
+  describe('12. DropDown - select all button', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [{ value: 'a', label: 'A' }],
+      });
+    };
+
+    it('1.12.1 the select all button is shown by default', () => {
+      const control = setup();
+
+      expect(control.dropDown.selectAllBtn).toBeTruthy();
+      expect(control.dropDown.showSelectAllButton).toBe(true);
+      expect(control.dropDown.selectAllBtn.style.display).not.toBe('none');
+    });
+
+    it('1.12.2 assigning false to showSelectAllButton hides the select all button', () => {
+      const control = setup();
+
+      control.dropDown.showSelectAllButton = false;
+
+      expect(control.dropDown.showSelectAllButton).toBe(false);
+      expect(control.dropDown.selectAllBtn.style.display).toBe('none');
+    });
+
+    it('1.12.3 assigning true to showSelectAllButton shows the select all button again', () => {
+      const control = setup();
+
+      control.dropDown.showSelectAllButton = false;
+      control.dropDown.showSelectAllButton = true;
+
+      expect(control.dropDown.showSelectAllButton).toBe(true);
+      expect(control.dropDown.selectAllBtn.style.display).not.toBe('none');
+    });
+  });
+
+  describe('13. Filter input element', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [{ value: 'a', label: 'Alpha' }],
+      });
+    };
+
+    it('1.13.1 component exposes a Filter object wrapping an <input type="text"> element', () => {
+      const control = setup();
+
+      expect(control.selectionBox.filter).toBeInstanceOf(Filter);
+      expect(control.selectionBox.filter.el.nodeType).toBe(1);
+      expect(control.selectionBox.filter.el.tagName).toBe('INPUT');
+      expect(control.selectionBox.filter.el.type).toBe('text');
+    });
+
+    it('1.13.2 the Filter wires a debounced event handler to its input that calls DropDown.filter', () => {
+      const control = setup();
+      const dropDownFilter = vi.spyOn(control.dropDown, 'filter');
+      vi.useFakeTimers();
+
+      try {
+        control.selectionBox.filter.el.value = 'alp';
+        control.selectionBox.filter.el.dispatchEvent({ type: 'input' });
+
+        expect(dropDownFilter).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(299);
+        expect(dropDownFilter).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(1);
+        expect(dropDownFilter).toHaveBeenCalledTimes(1);
+        expect(dropDownFilter).toHaveBeenCalledWith('alp');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('1.13.3 rapid successive input events trigger a single debounced DropDown.filter call with the last value', () => {
+      const control = setup();
+      const dropDownFilter = vi.spyOn(control.dropDown, 'filter');
+      vi.useFakeTimers();
+
+      try {
+        const el = control.selectionBox.filter.el;
+        el.value = 'a';
+        el.dispatchEvent({ type: 'input' });
+        el.value = 'al';
+        el.dispatchEvent({ type: 'input' });
+        el.value = 'alp';
+        el.dispatchEvent({ type: 'input' });
+
+        vi.advanceTimersByTime(300);
+
+        expect(dropDownFilter).toHaveBeenCalledTimes(1);
+        expect(dropDownFilter).toHaveBeenCalledWith('alp');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('1.13.4 displaySelected is a get/set visibility property defaulting to false', () => {
+      const control = setup();
+
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+
+      control.selectionBox.filter.displaySelected = true;
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+
+      control.selectionBox.filter.displaySelected = false;
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+    });
+
+    it('1.13.5 setting displaySelected=true calls DropDown.filter with a selected-only matcher', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [{ value: 'a', label: 'Alpha' }, { value: 'b', label: 'Beta' }],
+      });
+      control.items.at(0).toggle(true);
+
+      const dropDownFilter = vi.spyOn(control.dropDown, 'filter');
+      control.selectionBox.filter.displaySelected = true;
+
+      expect(dropDownFilter).toHaveBeenCalledTimes(1);
+      const [text, matcher] = dropDownFilter.mock.calls[0];
+      expect(text).toBe('');
+      expect(typeof matcher).toBe('function');
+
+      expect(matcher(control.items.at(0), '')).toBe(true);
+      expect(matcher(control.items.at(1), '')).toBe(false);
+    });
+
+    it('1.13.6 when displaySelected is false the debounced handler passes no matcher to DropDown.filter', () => {
+      const control = setup();
+      control.selectionBox.filter.displaySelected = false;
+
+      const dropDownFilter = vi.spyOn(control.dropDown, 'filter');
+      vi.useFakeTimers();
+
+      try {
+        control.selectionBox.filter.el.value = 'alp';
+        control.selectionBox.filter.el.dispatchEvent({ type: 'input' });
+        vi.advanceTimersByTime(300);
+
+        expect(dropDownFilter).toHaveBeenCalledTimes(1);
+        expect(dropDownFilter.mock.calls[0][1]).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('1.13.7 Filter.query stays in sync with filter.el.value', () => {
+      const control = setup();
+      const filter = control.selectionBox.filter;
+
+      expect(filter.query).toBe('');
+
+      filter.el.value = 'app';
+      expect(filter.query).toBe('app');
+
+      filter.query = 'alp';
+      expect(filter.query).toBe('alp');
+      expect(filter.el.value).toBe('alp');
+
+      filter.query = '';
+      expect(filter.el.value).toBe('');
+    });
+
+    it('1.13.8 displaySelected set to true shows only selected Items at once', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Beta' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+      control.items.at(0).toggle(true);
+
+      control.selectionBox.filter.displaySelected = true;
+
+      expect(control.items.at(0).visible).toBe(true);
+      expect(control.items.at(1).visible).toBe(false);
+      expect(control.items.at(2).visible).toBe(false);
+    });
+
+    it('1.13.9 displaySelected set to false shows every Item again', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Beta' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+      control.items.at(0).toggle(true);
+
+      control.selectionBox.filter.displaySelected = true;
+      control.selectionBox.filter.displaySelected = false;
+
+      expect(control.items.at(0).visible).toBe(true);
+      expect(control.items.at(1).visible).toBe(true);
+      expect(control.items.at(2).visible).toBe(true);
+    });
+
+    it('1.13.10 without displaySelected an empty query shows every Item', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Beta' },
+        ],
+      });
+
+      control.dropDown.filter('');
+
+      expect(control.items.at(0).visible).toBe(true);
+      expect(control.items.at(1).visible).toBe(true);
+    });
+
+    it('1.13.11 assigning query resets displaySelected to false', () => {
+      const control = setup();
+      control.selectionBox.filter.displaySelected = true;
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+
+      control.selectionBox.filter.query = 'alp';
+
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+    });
+
+    it('1.13.12 typing in the input resets displaySelected to false', () => {
+      const control = setup();
+      control.selectionBox.filter.displaySelected = true;
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+
+      control.selectionBox.filter.el.value = 'alp';
+      control.selectionBox.filter.el.dispatchEvent({ type: 'input' });
+
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+    });
+
+    it('1.13.13 setting displaySelected to false applies the filter imposed by the current query', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Beta' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+      const filter = control.selectionBox.filter;
+
+      filter.query = 'alpha';
+      expect(control.items.at(0).visible).toBe(true);
+      expect(control.items.at(1).visible).toBe(false);
+      expect(control.items.at(2).visible).toBe(false);
+
+      control.items.at(1).toggle(true);
+      filter.displaySelected = true;
+      expect(control.items.at(0).visible).toBe(false);
+      expect(control.items.at(1).visible).toBe(true);
+      expect(control.items.at(2).visible).toBe(false);
+
+      filter.displaySelected = false;
+      expect(control.items.at(0).visible).toBe(true);
+      expect(control.items.at(1).visible).toBe(false);
+      expect(control.items.at(2).visible).toBe(false);
     });
   });
 });

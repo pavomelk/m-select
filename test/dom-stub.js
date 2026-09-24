@@ -55,6 +55,7 @@ class ElementStub {
     this.title = '';
     this._textContent = '';
     this._innerHTML = '';
+    this.scrollIntoViewCalls = 0;
   }
 
   get className() {
@@ -98,9 +99,28 @@ class ElementStub {
     return node;
   }
 
-  addEventListener() {}
+addEventListener(type, fn) {
+    this._listeners = this._listeners || {};
+    (this._listeners[type] = this._listeners[type] || []).push(fn);
+  }
 
-  removeEventListener() {}
+  removeEventListener(type, fn) {
+    this._listeners = this._listeners || {};
+    const list = this._listeners[type] || [];
+    const i = list.indexOf(fn);
+    if (i >= 0) list.splice(i, 1);
+  }
+
+  /** Dispatches a bare event object to listeners registered for `type`. */
+  dispatchEvent(event) {
+    this._listeners = this._listeners || {};
+    const type = typeof event === 'string' ? event : event && event.type;
+    (this._listeners[type] || []).forEach((fn) => fn(event));
+  }
+
+  scrollIntoView() {
+    this.scrollIntoViewCalls = (this.scrollIntoViewCalls || 0) + 1;
+  }
 
   contains() {
     return false;

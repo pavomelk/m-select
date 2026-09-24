@@ -103,6 +103,38 @@ export class Item {
   #visible = true;
 
   /**
+   * "Current" marker, moved across Chips/Items by the SelectionBox navigation
+   * (selectFirst/selectPrevious/selectNext/selectLast). The setter reflects the
+   * state in both the Item view and the Chip view.
+   * @param {boolean} value
+   */
+  set current(value) {
+    this.#current = Boolean(value);
+    if (this.itemView) {
+      this.itemView.classList.toggle('cm-item--current', this.#current);
+    }
+    if (this.chipView) {
+      this.chipView.classList.toggle('cm-chip--current', this.#current);
+    }
+  }
+
+  /** @returns {boolean} */
+  get current() {
+    return this.#current;
+  }
+
+  /** @private backing field for the current property */
+  #current = false;
+
+  /** @private containing Items composition; set by the owning Items instance. */
+  siblingContainer = null;
+
+  /** The Items composition holding this Item. */
+  get container() {
+    return this.siblingContainer;
+  }
+
+  /**
    * Whether the Item represents a selectable option: a Group Item (its own
    * selection is an indicator) or a selectable Item carrying a value. A
    * leaf without a value cannot be toggled into "Selected".
@@ -114,6 +146,35 @@ export class Item {
   /** Depth in the tree (0 = root level). */
   get depth() {
     return this.parent ? this.parent.depth + 1 : 0;
+  }
+
+  /** The immediately following sibling Item, or null when this is the last. */
+  get nextSibling() {
+    if (!this.siblingContainer) return null;
+    const siblings = this.siblingContainer.list;
+    const index = siblings.indexOf(this);
+    return index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : null;
+  }
+
+  /** The immediately preceding sibling Item, or null when this is the first. */
+  get previousSibling() {
+    if (!this.siblingContainer) return null;
+    const siblings = this.siblingContainer.list;
+    const index = siblings.indexOf(this);
+    return index > 0 ? siblings[index - 1] : null;
+  }
+
+  /** The first Item in the same sibling set as this Item. */
+  get firstSibling() {
+    if (!this.siblingContainer) return null;
+    return this.siblingContainer.list[0];
+  }
+
+  /** The last Item in the same sibling set as this Item. */
+  get lastSibling() {
+    if (!this.siblingContainer) return null;
+    const siblings = this.siblingContainer.list;
+    return siblings[siblings.length - 1];
   }
 
   get selectableCount() {
@@ -268,7 +329,10 @@ export class Items {
     }
     this.element = element;
     this.list = list;
-    this.list.forEach((item) => this.element.append(item.itemView));
+    this.list.forEach((item) => {
+      item.siblingContainer = this;
+      this.element.append(item.itemView);
+    });
   }
 
   get length() {
@@ -318,6 +382,7 @@ export class Items {
 
   /** @param {Item} item */
   add(item) {
+    item.siblingContainer = this;
     this.list.push(item);
     this.element.append(item.itemView);
     return this;
@@ -344,6 +409,75 @@ export class Items {
   }
 }
 
+/** Text input narrowing the visible Items via a debounced `DropDown.filter` call. */
+export class Filter {
+  /**
+   * @param {MSelect} control
+   * @param {number} [debounceDelay] ms before the filter is applied
+   */
+  constructor(control, debounceDelay = 300) {
+    this.control = control;
+    this.debounceDelay = debounceDelay;
+    this.el = document.createElement('input');
+    this.el.className = 'cm-filter';
+    this.el.type = 'text';
+    this.el.placeholder = this.control.options.placeholder || '';
+    this.el.addEventListener('input', () => this.onInput());
+  }
+
+  /** @type {ReturnType<typeof setTimeout>|null} */
+  #debounceTimer = null;
+
+  /**
+   * Whether the Filter restricts the DropDown to selected Items only.
+   * Assigning a value immediately re-filters the DropDown: `true` shows only
+   * selected Items, `false` shows every Item again.
+   * @param {boolean} [value]
+   * @returns {boolean}
+   */
+  get displaySelected() {
+    return this.#displaySelected;
+  }
+
+  set displaySelected(value) {
+    this.#displaySelected = Boolean(value);
+    if (this.#displaySelected) {
+      this.control.dropDown.filter('', (item) => item.selected);
+    } else {
+      this.control.dropDown.filter(this.query);
+    }
+  }
+
+  /** @private backing field for displaySelected */
+  #displaySelected = false;
+
+  /**
+   * The current filter query. Reading returns the input element's value;
+   * assigning writes it to the element, turns `displaySelected` off and
+   * re-filters the DropDown by text.
+   * @param {string} [value]
+   * @returns {string}
+   */
+  get query() {
+    return this.el.value;
+  }
+
+  set query(value) {
+    this.el.value = String(value || '');
+    this.#displaySelected = false;
+    this.control.dropDown.filter(this.el.value);
+  }
+
+  /** Debounced event handler of the input element. */
+  onInput() {
+    clearTimeout(this.#debounceTimer);
+    this.#displaySelected = false;
+    this.#debounceTimer = setTimeout(() => {
+      this.control.dropDown.filter(this.query);
+    }, this.debounceDelay);
+  }
+}
+
 /** Always-visible part of the control: chips + filter + clear-all. */
 class SelectionBox {
   /**
@@ -357,18 +491,15 @@ class SelectionBox {
     this.el.className = 'cm-selection';
     this.chipsEl = document.createElement('div');
     this.chipsEl.className = 'cm-chips';
-    this.filter = document.createElement('input');
-    this.filter.className = 'cm-filter';
-    this.filter.type = 'text';
     this.clearBtn = document.createElement('button');
     this.clearBtn.className = 'cm-clear';
     this.clearBtn.title = 'Clear all selection';
     this.clearBtn.textContent = '\u2715';
 
-    this.el.append(this.chipsEl, this.filter, this.clearBtn);
+    this.filter = new Filter(this.control);
 
-    this.filter.placeholder = this.control.options.placeholder || '';
-    this.filter.addEventListener('input', () => this.control.onFilterInput());
+    this.el.append(this.chipsEl, this.filter.el, this.clearBtn);
+
     this.clearBtn.addEventListener('click', () => this.control.clearAll());
 
     this.chipsEl.addEventListener('click', (e) => this.control.onChipClick(e));
@@ -403,6 +534,10 @@ class SelectionBox {
     if (this.chipsEl.children.includes(item.chipView)) {
       this.chipsEl.removeChild(item.chipView);
     }
+
+    if (this.control.dropDown.currentItem === item) {
+      this.control.dropDown.clearCurrent();
+    }
   }
 
   /**
@@ -412,6 +547,39 @@ class SelectionBox {
    */
   chip(value) {
     return this.items.find((item) => item.value === value);
+  }
+
+  /** The Items currently shown as chips, in the order they are placed. */
+  get chipItems() {
+    return this.control.orderedChips();
+  }
+
+  /** Marks the first chip Item as current. */
+  selectFirst() {
+    const list = this.chipItems;
+    if (list.length > 0) this.control.dropDown.setCurrent(list[0]);
+  }
+
+  /** Marks the last chip Item as current. */
+  selectLast() {
+    const list = this.chipItems;
+    if (list.length > 0) this.control.dropDown.setCurrent(list[list.length - 1]);
+  }
+
+  /** Moves the "Current" marker to the next chip Item, wrapping at the end. */
+  selectNext() {
+    const list = this.chipItems;
+    if (list.length === 0) return;
+    const index = list.indexOf(this.control.dropDown.currentItem);
+    this.control.dropDown.setCurrent(list[(index + 1) % list.length]);
+  }
+
+  /** Moves the "Current" marker to the previous chip Item, wrapping at the start. */
+  selectPrevious() {
+    const list = this.chipItems;
+    if (list.length === 0) return;
+    const index = list.indexOf(this.control.dropDown.currentItem);
+    this.control.dropDown.setCurrent(list[(index - 1 + list.length) % list.length]);
   }
 
   render() {
@@ -443,12 +611,83 @@ class DropDown {
     this.el.append(this.toolbarEl, this.itemsEl);
   }
 
+  /** @private backing field: whether the "Select All" button is displayed. */
+  #showSelectAllBtn = true;
+
+  /**
+   * Controls whether the "Select All" button is displayed. Reads return the
+   * current visibility state; assigning a boolean shows or hides the button.
+   * @param {boolean} [value]
+   * @returns {boolean}
+   */
+  get showSelectAllButton() {
+    return this.#showSelectAllBtn;
+  }
+
+  set showSelectAllButton(value) {
+    this.#showSelectAllBtn = Boolean(value);
+    this.selectAllBtn.style.display = this.#showSelectAllBtn ? '' : 'none';
+  }
+
+  /** The currently marked Item, or null when none is defined. */
+  #currentItem = null;
+
+  /**
+   * The Item carrying the "Current" marker, or null when no marker is defined.
+   * @returns {Item|null}
+   */
+  get currentItem() {
+    return this.#currentItem;
+  }
+
+  /**
+   * Reassigns the "Current" marker: marks the given Item (or clears the marker
+   * when null) while keeping a single marker at a time.
+   * @param {Item|null} item
+   */
+  set currentItem(item) {
+    if (this.#currentItem === item) return;
+    if (this.#currentItem) this.#currentItem.current = false;
+    this.#currentItem = item || null;
+    if (this.#currentItem) {
+      this.#currentItem.current = true;
+      this.#ensureVisible(this.#currentItem);
+    }
+  }
+
+  /** Clears the "Current" marker, leaving no Item marked. */
+  clearCurrent() {
+    this.currentItem = null;
+  }
+
+  /**
+   * Marks the given Item (or clears the marker when given null) while keeping a
+   * single "Current" marker at a time.
+   * @param {Item|null} item
+   */
+  setCurrent(item) {
+    this.currentItem = item;
+  }
+
   open() {
     this.el.classList.add('cm-dropdown--open');
+    if (this.#currentItem) this.#ensureVisible(this.#currentItem);
   }
 
   close() {
     this.el.classList.remove('cm-dropdown--open');
+  }
+
+  /** Whether the DropDown is currently shown. */
+
+  /**
+   * Brings the given Item's `itemView` into the DropDown's visible viewport,
+   * but only while the DropDown is open (scrolling a hidden panel is pointless).
+   * @param {Item} item
+   */
+  #ensureVisible(item) {
+    if (!this.el.classList.contains('cm-dropdown--open')) return;
+    item.itemView.scrollIntoView({ block: 'nearest' });
   }
 
   /**
@@ -465,24 +704,25 @@ class DropDown {
    * @param {(item: Item, textValue: string) => boolean} [matchFn]
    */
   filter(textValue, matchFn) {
-    this.control.filterQuery = String(textValue || '');
-    const q = this.control.filterQuery.toLowerCase();
+    const query = String(textValue || '');
+    const q = query.toLowerCase();
+    const customMatcher = typeof matchFn === 'function';
     const matcher = matchFn || ((item) => item.label.toLowerCase().includes(q));
     const scope = this.control.options.groupItems?.toggleScope || 'all';
 
     const apply = (items) => {
       items.forEach((item) => {
         if (item.isGroup) {
-          const selfMatch = q === '' || matcher(item, q);
+          const selfMatch = customMatcher ? matcher(item, q) : q === '' || matcher(item, q);
           apply(item.children);
-          if (selfMatch && scope === 'all') {
+          if (selfMatch && scope === 'all' && !customMatcher) {
             item.children.forEach((child) => {
               child.visible = true;
             });
           }
           item.visible = selfMatch || item.children.some((child) => child.visible);
         } else {
-          item.visible = q === '' || matcher(item, q);
+          item.visible = customMatcher ? matcher(item, q) : q === '' || matcher(item, q);
         }
       });
     };
@@ -512,7 +752,6 @@ export class MSelect {
     this.root = root;
     this.options = config.options || {};
     this.logger = new Logger(this.options.logLevel || 'silent');
-    this.filterQuery = '';
 
     const rootEl = document.createElement('div');
     rootEl.className = 'cm-items';
@@ -589,28 +828,6 @@ export class MSelect {
    */
   setChipPlaceOrder(order) {
     this.options.chipPlaceOrder = order;
-    this.render();
-  }
-
-  /** Tells whether an item matches the current filter query. */
-  matchesFilter(item) {
-    if (this.filterQuery === '') return true;
-    const q = this.filterQuery.toLowerCase();
-    const selfMatch = item.label.toLowerCase().includes(q);
-    if (selfMatch) return true;
-    const scope = this.options.groupItems?.filterScope || 'subtree';
-    if (item.isGroup && scope === 'subtree') {
-      return item.children.some((c) => this.matchesFilter(c));
-    }
-    return item.children.some((c) => this.matchesFilter(c));
-  }
-
-  /** Recomputes visibility and repaints dropdown. */
-  onFilterInput() {
-    this.filterQuery = this.selectionBox.filter.value;
-    this.allItems.forEach((item) => {
-      item.visible = this.matchesFilter(item);
-    });
     this.render();
   }
 
