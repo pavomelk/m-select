@@ -62,6 +62,7 @@ Before creating code:
 m-select/
 ├── src/
 │   ├── m-select.js
+│   ├── modes.js        (per-input-mode definitions: onEntry/onLeave/handlers)
 │   ├── m-select.css
 ├── test/
 ├── demo/

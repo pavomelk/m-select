@@ -5,6 +5,8 @@
 
 const LOG_LEVELS = ['silent', 'error', 'warn', 'info', 'debug'];
 
+import { MODES, filterMode, dropdownMode, chipMode, collapsedMode } from './modes.js';
+
 /**
  * Simple built-in logger with configurable verbosity.
  */
@@ -975,12 +977,11 @@ class DropDown {
   }
 }
 
-const MODES = Object.freeze({
-  FILTER: 'filter',
-  CHIP: 'chip',
-  COLLAPSED: 'collapsed',
-  DROPDOWN: 'dropdown',
-});
+/*
+ * The MODES constant and the per-mode definitions live in `src/modes.js` and
+ * are imported above; MSelect#constructor registers them with the modes
+ * machine.
+ */
 
 /**
  * Walks up to the nearest element matching `className`, with a bare fallback
@@ -1113,31 +1114,10 @@ export class MSelect {
 
     this[MSELECT_INTERNALS] = { modes: this.#modes };
 
-    this.#modes.define(MODES.FILTER, {
-      onEntry: () => {
-        const input = this.selectionBox.filter.el;
-        input.readOnly = false;
-        this.selectionBox.filter.displaySelected = false;
-      },
-      onLeave: () => {
-        const input = this.selectionBox.filter.el;
-        input.readOnly = true;
-        input.blur();
-      },
-      handlers: {
-        ArrowDown: () => this.#onFilterArrowDown(),
-      },
-    });
-    this.#modes.define(MODES.DROPDOWN, {});
-    this.#modes.define(MODES.CHIP, {});
-    this.#modes.define(MODES.COLLAPSED, {
-      onEntry: () => {
-        this.selectionBox.filter.displaySelected = true;
-      },
-      onLeave: () => {
-        this.selectionBox.filter.displaySelected = false;
-      },
-    });
+    this.#modes.define(MODES.FILTER, filterMode(this));
+    this.#modes.define(MODES.DROPDOWN, dropdownMode(this));
+    this.#modes.define(MODES.CHIP, chipMode(this));
+    this.#modes.define(MODES.COLLAPSED, collapsedMode(this));
 
     this.selectionBox.el.addEventListener('click', (e) => this.#onSelectionBoxClick(e));
     document.addEventListener('mousedown', (e) => this.#onDocumentMouseDown(e));
@@ -1210,19 +1190,6 @@ export class MSelect {
   /** Focus on the Filter means entering the default Filter mode. */
   onFilterFocus() {
     this.#activateFilter();
-  }
-
-  /**
-   * Filter-mode ArrowDown: opens the closed DropDown and makes the first
-   * visible Item Current. When the DropDown is already open, the Current
-   * marker is left untouched (navigation is handled separately).
-   */
-  #onFilterArrowDown() {
-    const dd = this.dropDown;
-    if (dd.el.classList.contains('cm-dropdown--open')) return;
-    const first = this.allItems.find((item) => item.visible);
-    if (first) dd.setCurrent(first);
-    dd.open();
   }
 
   /**
