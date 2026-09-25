@@ -129,6 +129,14 @@ addEventListener(type, fn) {
     this.scrollIntoViewCalls = (this.scrollIntoViewCalls || 0) + 1;
   }
 
+  focus() {
+    this.focused = true;
+  }
+
+  blur() {
+    this.focused = false;
+  }
+
   contains() {
     return false;
   }
@@ -164,8 +172,19 @@ addEventListener(type, fn) {
 
 globalThis.document = {
   createElement: (tag) => new ElementStub(tag),
-  addEventListener: noop,
-  removeEventListener: noop,
+  _listeners: {},
+  addEventListener(type, fn) {
+    (this._listeners[type] = this._listeners[type] || []).push(fn);
+  },
+  removeEventListener(type, fn) {
+    const list = this._listeners[type] || [];
+    const i = list.indexOf(fn);
+    if (i >= 0) list.splice(i, 1);
+  },
+  dispatchEvent(event) {
+    const type = typeof event === 'string' ? event : event && event.type;
+    (this._listeners[type] || []).forEach((fn) => fn(event));
+  },
   body: new ElementStub('body'),
 };
 

@@ -118,6 +118,14 @@
 - [ ] `REQ-3.10-02` *Filter mode* — user enters text to narrow down the selection range (open). *(P0)*
 - [ ] `REQ-3.10-03` *Chip mode* — user navigates *Chips* (open or closed). *(P0)*
 - [ ] `REQ-3.10-04` *Collapsed mode* — user navigates *Items* when there is a *Collapsed Chip* (open or closed). *(P1)*
+- [ ] `REQ-3.10-05` Clicking the *Filter* input enters *Filter mode* and opens the *Drop Down*; the input caret is enabled. *(P0)*
+- [ ] `REQ-3.10-06` Clicking a *Chip* enters *Chip mode*, marks that *Item* *Current* (reflected in the *Drop Down* and scrolled into view) and opens the *Drop Down*; the caret is hidden. *(P0)*
+- [ ] `REQ-3.10-07` Clicking the *Collapsed Chip* enters *Collapsed mode*, restricts the *Drop Down* to the selected *Items* and opens it; the caret is hidden. *(P0)*
+- [ ] `REQ-3.10-08` Clicking *Remove all* clears the selection and the *Current* *Item*, enters *Filter mode* and opens the *Drop Down*. *(P0)*
+- [ ] `REQ-3.10-09` Clicking elsewhere inside the *Selection Box* enters *DropDown mode* and opens the *Drop Down*. *(P0)*
+- [ ] `REQ-3.10-10` Clicking outside the *Control* closes the *Drop Down*, reverts to the default *Filter mode* and hides the caret. *(P0)*
+- [ ] `REQ-3.10-11` *Filter mode* is the default mode; every user action dispatches a mode change. *(P0)*
+- [ ] `REQ-3.10-12` The *Modes* object is not part of the public API; tests observe mode switches through an exported symbol. *(P0)*
 
 ---
 

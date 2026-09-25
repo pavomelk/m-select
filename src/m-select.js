@@ -510,6 +510,7 @@ export class Filter {
     this.el.className = 'cm-filter';
     this.el.type = 'text';
     this.el.placeholder = this.control.options.placeholder || '';
+    this.el.readOnly = true;
     this.el.addEventListener('input', () => this.onInput());
   }
 
@@ -624,10 +625,6 @@ class SelectionBox {
     this.keepCollapsed = false;
 
     this.el.append(this.chipsEl, this.filter.el, this.clearBtn);
-
-    this.clearBtn.addEventListener('click', () => this.control.clearAll());
-
-    this.chipsEl.addEventListener('click', (e) => this.control.onChipClick(e));
   }
 
   /** @private backing field: whether the selection is shown as a CollapsedChip. */
@@ -915,6 +912,68 @@ class DropDown {
   }
 }
 
+const MODES = Object.freeze({
+  FILTER: 'filter',
+  CHIP: 'chip',
+  COLLAPSED: 'collapsed',
+  DROPDOWN: 'dropdown',
+});
+
+/**
+ * Walks up to the nearest element matching `className`, with a bare fallback
+ * for stub DOM elements that lack Element.prototype.closest.
+ * @param {unknown} el
+ * @param {string} className
+ * @returns {HTMLElement|null}
+ */
+function closestByClass(el, className) {
+  if (!el) return null;
+  if (typeof el.closest === 'function') return el.closest(className);
+  return el.classList && el.classList.contains(className) ? el : null;
+}
+
+/**
+ * Internal input-mode state machine. Holds the active input mode and the
+ * per-mode input handler sets; `process()` routes an input event to the active
+ * mode's handler. Not part of the public API — reachable only through the
+ * `MSELECT_INTERNALS` symbol exported for tests.
+ */
+class Modes {
+  /** @private backing field for the active mode */
+  #mode = MODES.FILTER;
+  /** @private per-mode input handler sets */
+  #sets = new Map();
+
+  /** The currently active input mode. */
+  get mode() {
+    return this.#mode;
+  }
+
+  /**
+   * Switches the active input mode and (optionally) its handler set.
+   * @param {string} mode one of MODES.*
+   * @param {Record<string, Function>} [handlers]
+   */
+  enter(mode, handlers) {
+    this.#mode = mode;
+    if (handlers) this.#sets.set(mode, handlers);
+  }
+
+  /**
+   * Routes an input event to the active mode's handler, switching the function
+   * that processes the input. Returns the handler's result, or false when the
+   * active mode does not handle the event.
+   * @param {string} name
+   * @param {...unknown} args
+   * @returns {unknown}
+   */
+  process(name, ...args) {
+    const set = this.#sets.get(this.#mode) || {};
+    const fn = set[name];
+    return fn ? fn(...args) : false;
+  }
+}
+
 /**
  * The component.
  */
@@ -940,19 +999,101 @@ export class MSelect {
     this.el.append(this.selectionBox.el, this.dropDown.el);
     root.append(this.el);
 
-    this.selectionBox.el.addEventListener('click', (e) => {
-      if (!this.dropDown.el.contains(e.target)) {
-        this.dropDown.open();
-      }
-    });
-    document.addEventListener('mousedown', (e) => {
-      if (!this.el.contains(e.target)) {
-        this.dropDown.close();
-      }
-    });
+    this[MSELECT_INTERNALS] = { modes: this.#modes };
+
+    this.selectionBox.el.addEventListener('click', (e) => this.#onSelectionBoxClick(e));
+    document.addEventListener('mousedown', (e) => this.#onDocumentMouseDown(e));
 
     this.logger.info('component rendered');
     this.render();
+  }
+
+  /** @private internal input-mode state machine, exposed only via MSELECT_INTERNALS */
+  #modes = new Modes();
+
+  /**
+   * Routes a SelectionBox click to the input mode matching the clicked part.
+   * @private
+   * @param {Event} e
+   */
+  #onSelectionBoxClick(e) {
+    const target = e.target;
+
+    if (closestByClass(target, 'cm-clear')) {
+      this.clearAll();
+      this.#enterMode(MODES.FILTER);
+      this.dropDown.open();
+      return;
+    }
+
+    if (closestByClass(target, 'cm-chip__x')) {
+      this.onChipClick(e);
+      return;
+    }
+
+    if (closestByClass(target, 'cm-chip--summary')) {
+      this.#enterMode(MODES.COLLAPSED);
+      this.dropDown.open();
+      return;
+    }
+
+    if (closestByClass(target, 'cm-chip')) {
+      const item = target._item;
+      if (item) {
+        this.#enterMode(MODES.CHIP);
+        this.dropDown.open();
+        this.dropDown.setCurrent(item);
+      }
+      return;
+    }
+
+    if (target === this.selectionBox.filter.el) {
+      this.#enterMode(MODES.FILTER);
+      this.dropDown.open();
+      return;
+    }
+
+    this.#enterMode(MODES.DROPDOWN);
+    this.dropDown.open();
+  }
+
+  /**
+   * Switches the active input mode and applies its display consequences: only
+   * the filter mode enables the input caret, and only the collapsed mode
+   * limits the DropDown to selected Items.
+   * @private
+   * @param {string} mode
+   */
+  #enterMode(mode) {
+    this.#modes.enter(mode);
+    const input = this.selectionBox.filter.el;
+    if (mode === MODES.FILTER) {
+      input.readOnly = false;
+      input.focus();
+    } else {
+      input.readOnly = true;
+      input.blur();
+    }
+    if (mode === MODES.COLLAPSED) {
+      this.selectionBox.filter.displaySelected = true;
+    } else {
+      this.selectionBox.filter.displaySelected = false;
+    }
+  }
+
+  /**
+   * Closes the DropDown when the pointer lands outside the control and resets
+   * the input to the default filter mode.
+   * @private
+   * @param {Event} e
+   */
+  #onDocumentMouseDown(e) {
+    if (this.el.contains(e.target)) return;
+    this.dropDown.close();
+    this.selectionBox.filter.el.readOnly = true;
+    this.selectionBox.filter.el.blur();
+    this.selectionBox.filter.displaySelected = false;
+    this.#modes.enter(MODES.FILTER);
   }
 
   /** @private Throws when more than one Item declares the same non-empty value. */
@@ -1043,6 +1184,7 @@ export class MSelect {
     this.items.selectableItems.forEach((i) => {
       i.selected = false;
     });
+    this.dropDown.clearCurrent();
     this.render();
   }
 
@@ -1062,7 +1204,10 @@ export class MSelect {
    * @param {Event} e
    */
   onChipClick(e) {
-    const x = e.target && e.target.closest ? e.target.closest('.cm-chip__x') : null;
+    const x =
+      (e.target && e.target.classList && e.target.classList.contains('cm-chip__x') && e.target) ||
+      (e.target && typeof e.target.closest === 'function' && e.target.closest('.cm-chip__x')) ||
+      null;
     if (x && x._item) {
       e.stopPropagation();
       this.unselectItem(x._item);
@@ -1076,5 +1221,11 @@ export class MSelect {
 }
 
 export const msLog = new Logger();
+
+/**
+ * Symbol-keyed access to internal, non-public state. Not part of the public
+ * API; exported so tests can observe internals (e.g. the Modes machine).
+ */
+export const MSELECT_INTERNALS = Symbol('m-select.internals');
 
 export default MSelect;

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MSelect, Item, RootContainer, Filter } from '../src/m-select.js';
+import { MSelect, Item, RootContainer, Filter, MSELECT_INTERNALS } from '../src/m-select.js';
 
 /**
  * Behavioural spec for m-select.
@@ -1726,6 +1726,201 @@ describe('1. MSelect', () => {
       expect(control.selectionBox.chipsEl.children).not.toContain(
         control.selectionBox.collapsedChip.chipView
       );
+    });
+  });
+
+  // requires: Modes state machine + MSELECT_INTERNALS symbol, per-part click
+  // routing on the SelectionBox, filter input readOnly/focus toggling,
+  // clearAll -> no Current item, document mousedown -> close
+  describe('15. Modes', () => {
+    const setup = (items) => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items:
+          items ||
+          [
+            { value: 'a', label: 'Alpha' },
+            { value: 'b', label: 'Bravo' },
+            { value: 'c', label: 'Charlie' },
+          ],
+      });
+      return control;
+    };
+
+    const setupCollapsed = () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { maxVisibleChips: 2 },
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+          { value: 'd', label: 'Delta' },
+        ],
+      });
+      return control;
+    };
+
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const isOpen = (control) =>
+      control.dropDown.el.classList.contains('cm-dropdown--open');
+
+    it('1.15.1 the internal Modes object is reachable only through the exported symbol and defaults to "filter"', () => {
+      const control = setup();
+      expect(Object.keys(control)).not.toContain('modes');
+      expect(typeof MSELECT_INTERNALS).toBe('symbol');
+      expect(control[MSELECT_INTERNALS]).toBeTruthy();
+      expect(modes(control).mode).toBe('filter');
+      expect(control.selectionBox.filter.el.readOnly).toBe(true);
+    });
+
+    it('1.15.2 clicking the Filter enters the filter mode, opens the DropDown and enables the input caret', () => {
+      const control = setup();
+      const input = control.selectionBox.filter.el;
+      expect(input.readOnly).toBe(true);
+
+      control.selectionBox.el.dispatchEvent({ type: 'click', target: input });
+
+      expect(modes(control).mode).toBe('filter');
+      expect(isOpen(control)).toBe(true);
+      expect(input.readOnly).toBe(false);
+      expect(input.focused).toBe(true);
+    });
+
+    it('1.15.3 clicking a Chip enters the chip mode, marks it Current, scrolls it into view and hides the caret', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      const item = control.items[0];
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: item.chipView,
+      });
+
+      expect(modes(control).mode).toBe('chip');
+      expect(isOpen(control)).toBe(true);
+      expect(control.dropDown.currentItem).toBe(item);
+      expect(item.current).toBe(true);
+      expect(item.itemView.classList.contains('cm-item--current')).toBe(true);
+      expect(item.itemView.scrollIntoViewCalls).toBe(1);
+      expect(control.selectionBox.filter.el.readOnly).toBe(true);
+    });
+
+    it('1.15.4 clicking the CollapsedChip enters the collapsed mode and shows only selected Items in the DropDown', () => {
+      const control = setupCollapsed();
+      for (const item of [...control.items].slice(0, 3)) item.toggle(true);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.selectionBox.collapsedChip.chipView,
+      });
+
+      expect(modes(control).mode).toBe('collapsed');
+      expect(isOpen(control)).toBe(true);
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[3].visible).toBe(false);
+      expect(control.selectionBox.filter.el.readOnly).toBe(true);
+    });
+
+    it('1.15.5 clicking RemoveAll clears the selection and the Current marker, opens the DropDown and enters the filter mode', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      control.dropDown.setCurrent(control.items[0]);
+      expect(control.selectedItems).toHaveLength(2);
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.selectionBox.clearBtn,
+      });
+
+      expect(control.selectedItems).toHaveLength(0);
+      expect(control.dropDown.currentItem).toBeNull();
+      expect(isOpen(control)).toBe(true);
+      expect(modes(control).mode).toBe('filter');
+      expect(control.selectionBox.filter.el.readOnly).toBe(false);
+    });
+
+    it('1.15.6 clicking outside the control closes the DropDown and returns to the default filter mode', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.items[0].chipView,
+      });
+      expect(modes(control).mode).toBe('chip');
+      expect(isOpen(control)).toBe(true);
+
+      document.dispatchEvent({ type: 'mousedown' });
+
+      expect(isOpen(control)).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+      expect(control.selectionBox.filter.el.readOnly).toBe(true);
+    });
+
+    it('1.15.7 clicking outside the control also resets the "show only selected" display', () => {
+      const control = setupCollapsed();
+      for (const item of [...control.items].slice(0, 3)) item.toggle(true);
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.selectionBox.collapsedChip.chipView,
+      });
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+
+      document.dispatchEvent({ type: 'mousedown' });
+
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      expect(control.items[3].visible).toBe(true);
+    });
+
+    it('1.15.8 consequent clicks keep switching the active mode (chip -> filter -> chip)', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.items[0].chipView,
+      });
+      expect(modes(control).mode).toBe('chip');
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.selectionBox.filter.el,
+      });
+      expect(modes(control).mode).toBe('filter');
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.items[1].chipView,
+      });
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.15.9 clicking the Filter after the CollapsedChip resets the "show only selected" display', () => {
+      const control = setupCollapsed();
+      for (const item of [...control.items].slice(0, 3)) item.toggle(true);
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.selectionBox.collapsedChip.chipView,
+      });
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.selectionBox.filter.el,
+      });
+
+      expect(modes(control).mode).toBe('filter');
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      expect(control.items[3].visible).toBe(true);
     });
   });
 });
