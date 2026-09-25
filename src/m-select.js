@@ -43,11 +43,86 @@ export class Logger {
 const normalizeBool = (value) => value !== false && String(value) !== 'false';
 
 /**
- * Sentinel "parent" of the root Item. A shared empty array can never be a real
- * parent — a real parent contains its children, so it has `length >= 1` — and
- * thus `parent.length === 0` unambiguously marks the root level.
+ * The root of an option tree. It is a separate Array-like object used as the
+ * parent of every top-level Item and offers the same owner interface an Item
+ * does: `element` (where the top-level `itemView`s attach), `depth = -1` (so
+ * top-level Items resolve to depth 0) and numeric keys / iteration over its
+ * Items. In a component, its `element` is the one managed by the DropDown.
  */
-const EMPTY_PARENT = Object.freeze([]);
+export class RootContainer {
+  constructor() {
+    this.depth = -1;
+    this.isRoot = true;
+    this.hasParent = false;
+    // Sentinel "parent": an empty array can never be a real parent — a real
+    // parent holds its children, so it has `length >= 1`.
+    this.parent = Object.freeze([]);
+
+    this.element = document.createElement('div');
+    this.element.className = 'cm-items';
+  }
+
+  /** @private array of registered top-level Items (mirrored by numeric keys). */
+  #children = [];
+
+  /** Number of registered top-level Items. */
+  get length() {
+    return this.#children.length;
+  }
+
+  /** Iterates over the registered top-level Items, enabling `for…of` and spread. */
+  [Symbol.iterator]() {
+    return this.#children[Symbol.iterator]();
+  }
+
+  /** Registers the given top-level Item under the next numeric key. */
+  add(item) {
+    const index = this.#children.length;
+    this.#children.push(item);
+    Object.defineProperty(this, index, {
+      get: () => this.#children[index],
+      configurable: true,
+      enumerable: true,
+    });
+    return item;
+  }
+
+  /** Depth-first flattening of all option Items under this container. */
+  flatten() {
+    const result = [];
+    const walk = (node) => {
+      result.push(node);
+      for (const child of node) {
+        walk(child);
+      }
+    };
+    for (const child of this) {
+      walk(child);
+    }
+    return result;
+  }
+
+  /** All option Items (in tree order) that are selectable and carry a value. */
+  get selectableItems() {
+    return this.flatten().filter((item) => item.selectable && item.value !== undefined);
+  }
+
+  /**
+   * Builds a root container of top-level Items from specs (or pre-built Items).
+   * Each top-level Item receives the container as its `parent`.
+   * @param {object[]} [specs]
+   * @param {object} [options]
+   * @returns {RootContainer}
+   */
+  static build(specs, options) {
+    const container = new RootContainer();
+    (specs || []).forEach((spec, index) => {
+      const item = spec instanceof Item ? spec : new Item(spec, options, index, container);
+      container.add(item);
+    });
+    return container;
+  }
+}
 
 /**
  * Single option tree node: either a Leaf Item or a Group Item with children.
@@ -58,79 +133,80 @@ export class Item {
    * @param {object[]} spec.items child item specs
    * @param {object} [options] component options (e.g. `align` per level)
    * @param {number} [definitionIndex]
+   * @param {RootContainer|Item} parent required owning container or Item
    */
-  constructor(spec = {}, options = {}, definitionIndex = 0) {
-    const root = Boolean(spec && spec.__root);
-    if (!root && (spec.label === undefined || spec.label === null || spec.label === '')) {
+  constructor(spec = {}, options = {}, definitionIndex = 0, parent) {
+    if (!parent) {
+      throw new Error('Item requires a parent (a RootContainer or an owning Item)');
+    }
+    if (spec.label === undefined || spec.label === null || spec.label === '') {
       throw new Error('Item without label is not allowed');
     }
     this.options = options;
-    this.label = root ? undefined : spec.label;
-    this.value = root ? undefined : spec.value;
-    this.selectable = root ? false : normalizeBool(spec.selectable);
+    this.label = spec.label;
+    this.value = spec.value;
+    this.selectable = normalizeBool(spec.selectable);
 
-    this.#root = root;
     this.definitionIndex = definitionIndex;
     this.isGroup = false;
-    this.selected = root ? false : Boolean(spec.selected);
-    this.#visible = root ? true : spec.visible === undefined ? true : Boolean(spec.visible);
-    this.parent = root ? EMPTY_PARENT : null;
+    this.selected = Boolean(spec.selected);
+    this.#visible = spec.visible === undefined ? true : Boolean(spec.visible);
+    this.parent = parent;
     this.owner = null;
 
     this.element = document.createElement('div');
-    this.element.className = root ? 'cm-items' : 'cm-item__children';
-    if (!root && (options.align || {})[this.depth] === 'row') {
+    this.element.className = 'cm-item__children';
+    if ((options.align || {})[this.depth] === 'row') {
       this.element.classList.add('cm-item__children--row');
     }
 
-    if (!root) {
-      this.#adopt((spec.items || []).map((child, i) => new Item(child, options, 0)));
-      this.#createDOM();
-      this.syncView();
-    }
+    this.#adopt((spec.items || []).map((child) => new Item(child, options, 0, this)));
+    this.#createDOM();
+    this.attachToParent();
+    this.syncView();
   }
 
   /**
-   * Creates the root Item that owns the given top-level specs. The root has no
-   * own row (`itemView`) — its `element` holds the top-level `itemView`s — and
-   * behaves as an array-like container over them.
+   * Creates the root container owning the given top-level specs (or pre-built
+   * Items). Its `element` holds the top-level `itemView`s.
    * @param {object[]} [specs]
    * @param {object} [options]
-   * @returns {Item}
+   * @returns {RootContainer}
    */
   static root(children, options) {
-    const root = new Item({ __root: true }, options);
-    root.#adopt(
-      (children || []).map((child) => (child instanceof Item ? child : new Item(child, options))),
-    );
-    root.isGroup = root.length > 0;
-    return root;
+    return RootContainer.build(children, options);
   }
-
-  /** @private true for the root container Item built by `Item.root`. */
-  #root = false;
 
   /** @private array of child Items in tree order (mirrored by numeric keys). */
   #children = [];
 
   /**
-   * Adopts the given child Items: stores them under numeric keys (`item[0]`,
-   * `item[1]`, …), links each child back, and appends its `itemView` to
-   * `element`.
+   * Adopts the given child Items: marks the Item as a Group when non-empty and
+   * stores the children under numeric keys (`item[0]`, `item[1]`, …). Each child
+   * knows its parent (passed at construction) and has already attached its own
+   * `itemView` to this Item's `element`.
    * @param {Item[]} children
    */
   #adopt(children) {
     this.#children = children;
     this.isGroup = children.length > 0;
     children.forEach((child, index) => {
-      child.parent = this;
-      this.element.append(child.itemView);
       Object.defineProperty(this, index, {
         get: () => this.#children[index],
         configurable: true,
         enumerable: true,
       });
     });
+  }
+
+  /**
+   * Attaches this Item's `itemView` into the `element` of the Item that owns it
+   * (`this.parent`). Called during construction.
+   * @returns {HTMLElement} the attached `itemView`
+   */
+  attachToParent() {
+    this.parent.element.append(this.itemView);
+    return this.itemView;
   }
 
   /** Number of direct child Items. */
@@ -187,9 +263,17 @@ export class Item {
   /** @private backing field for the current property */
   #current = false;
 
-  /** The Item or the root sentinel (`EMPTY_PARENT`) holding this Item. */
+  /** The Item owning this Item. */
   get container() {
     return this.parent;
+  }
+
+  /**
+   * Depth in the tree (0 = root level, i.e. direct Items of the RootContainer,
+   * whose own depth is -1).
+   */
+  get depth() {
+    return this.parent.depth + 1;
   }
 
   /**
@@ -201,20 +285,8 @@ export class Item {
     return this.isGroup || (this.selectable && this.value !== undefined);
   }
 
-  /**
-   * Depth in the tree (0 = root level). The root Item itself reports -1 (its
-   * `parent` is the empty sentinel) so its children resolve to depth 0; a
-   * standalone Item without any parent is depth 0 as well.
-   */
-  get depth() {
-    if (!this.parent) return 0;
-    if (this.parent.length === 0) return -1;
-    return this.parent.depth + 1;
-  }
-
   /** The immediately following sibling Item, or null when this is the last. */
   get nextSibling() {
-    if (!this.parent) return null;
     const siblings = [...this.parent];
     const index = siblings.indexOf(this);
     return index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : null;
@@ -222,7 +294,6 @@ export class Item {
 
   /** The immediately preceding sibling Item, or null when this is the first. */
   get previousSibling() {
-    if (!this.parent) return null;
     const siblings = [...this.parent];
     const index = siblings.indexOf(this);
     return index > 0 ? siblings[index - 1] : null;
@@ -230,13 +301,11 @@ export class Item {
 
   /** The first Item in the same sibling set as this Item. */
   get firstSibling() {
-    if (!this.parent) return null;
     return this.parent[0];
   }
 
   /** The last Item in the same sibling set as this Item. */
   get lastSibling() {
-    if (!this.parent) return null;
     const siblings = [...this.parent];
     return siblings[siblings.length - 1];
   }
@@ -763,10 +832,7 @@ export class MSelect {
     this.options = config.options || {};
     this.logger = new Logger(this.options.logLevel || 'silent');
 
-    this.items = Item.root(
-      (config.items || []).map((spec, i) => new Item(spec, this.options, i)),
-      this.options,
-    );
+    this.items = Item.root(config.items || [], this.options);
     this.#assertUniqueValues();
     this.selectionBox = new SelectionBox(this);
     this.dropDown = new DropDown(this);

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MSelect, Item, Filter } from '../src/m-select.js';
+import { MSelect, Item, RootContainer, Filter } from '../src/m-select.js';
 
 describe('1. MSelect', () => {
   describe('1. Items', () => {
-    it('1.1.1 MSelect.items is a root Item acting as an array-like container', () => {
+    it('1.1.1 MSelect.items is a RootContainer, array-like over the top-level Items', () => {
       const host = document.createElement('div');
       const control = new MSelect(host, {
         items: [
@@ -12,7 +12,7 @@ describe('1. MSelect', () => {
         ],
       });
 
-      expect(control.items).toBeInstanceOf(Item);
+      expect(control.items).toBeInstanceOf(RootContainer);
       expect(control.items).toHaveLength(2);
       expect(control.items[0]).toBeInstanceOf(Item);
       expect(control.items[1]).toBeInstanceOf(Item);
@@ -110,39 +110,41 @@ describe('1. MSelect', () => {
   });
 
   describe('2. Item', () => {
+    const root = Item.root([]);
+
     it('1.2.1 Item.toggle() changes state to selected', () => {
-      const item = new Item({ value: 'a', label: 'A' });
+      const item = new Item({ value: 'a', label: 'A' }, {}, 0, root);
       expect(item.selected).toBe(false);
       item.toggle();
       expect(item.selected).toBe(true);
     });
 
     it('1.2.2 Item.toggle(true) ensures the item is selected', () => {
-      const item = new Item({ value: 'a', label: 'A' });
+      const item = new Item({ value: 'a', label: 'A' }, {}, 0, root);
       item.toggle(true);
       expect(item.selected).toBe(true);
     });
 
     it('1.2.3 Item.toggle(false) ensures the item is not selected', () => {
-      const item = new Item({ value: 'a', label: 'A', selected: true });
+      const item = new Item({ value: 'a', label: 'A', selected: true }, {}, 0, root);
       item.toggle(false);
       expect(item.selected).toBe(false);
     });
 
     it('1.2.4 selected:true instantiates the item in the "selected" state', () => {
-      const item = new Item({ value: 'a', label: 'A', selected: true });
+      const item = new Item({ value: 'a', label: 'A', selected: true }, {}, 0, root);
       expect(item.selected).toBe(true);
     });
 
     it('1.2.5 Item instantiation includes an ItemView with a distinct selected class', () => {
-      const item = new Item({ value: 'a', label: 'A', selected: true });
+      const item = new Item({ value: 'a', label: 'A', selected: true }, {}, 0, root);
       expect(item.itemView).toBeTruthy();
       expect(item.itemView.nodeType).toBe(1);
       expect(item.itemView.classList.contains('cm-item--selected')).toBe(true);
     });
 
     it('1.2.6 Item instantiation includes ChipView DOM elements', () => {
-      const item = new Item({ value: 'a', label: 'A' });
+      const item = new Item({ value: 'a', label: 'A' }, {}, 0, root);
       expect(item.chipView).toBeTruthy();
       expect(item.chipView.nodeType).toBe(1);
       expect(item.chipView.classList.contains('cm-chip')).toBe(true);
@@ -171,16 +173,17 @@ describe('1. MSelect', () => {
       expect(group.element.children[1]).toBe(group[1].itemView);
     });
 
-    it('1.3.2 the root Item element holds the itemViews of its top-level Items', () => {
-      const a = new Item({ value: 'a', label: 'A' });
-      const b = new Item({ value: 'b', label: 'B' });
-      const root = Item.root([a, b]);
+    it('1.3.2 the RootContainer element holds the itemViews of its top-level Items', () => {
+      const root = Item.root([
+        { value: 'a', label: 'A' },
+        { value: 'b', label: 'B' },
+      ]);
 
       expect(root.element.nodeType).toBe(1);
       expect(root.element.className).toBe('cm-items');
       expect(root.element.children).toHaveLength(2);
-      expect(root.element.children[0]).toBe(a.itemView);
-      expect(root.element.children[1]).toBe(b.itemView);
+      expect(root.element.children[0]).toBe(root[0].itemView);
+      expect(root.element.children[1]).toBe(root[1].itemView);
     });
 
     it('1.3.3 Item + Item composition accommodates arbitrary hierarchy depth (>= 3 levels)', () => {
@@ -228,6 +231,16 @@ describe('1. MSelect', () => {
       const deepest = control.items.flatten().reduce((a, b) => (b.depth > a.depth ? b : a));
       expect(deepest.depth).toBe(2);
       expect(control.items[1][1][0].value).toBe('l3-b2.1');
+    });
+
+    it('1.3.4 an Item attaches its own itemView into the element of its parent', () => {
+      const root = Item.root([]);
+      const parent = new Item({ label: 'Group' }, {}, 0, root);
+      const child = new Item({ value: 'a', label: 'A' }, {}, 0, parent);
+
+      expect(parent.element.children).toContain(child.itemView);
+      expect(parent.element.children).toHaveLength(1);
+      expect(root.element.children).toContain(parent.itemView);
     });
   });
 
@@ -1059,6 +1072,30 @@ describe('1. MSelect', () => {
       expect(fruit[0].firstSibling).toBe(fruit[0]);
       expect(fruit[1].lastSibling).toBe(fruit[1]);
       expect(fruit.lastSibling).toBe(control.items[2]);
+    });
+
+    it('1.11.6 the RootContainer is the only root: every Item has a parent', () => {
+      const control = setup();
+
+      for (const item of control.allItems) {
+        expect(item.parent).toBeTruthy();
+      }
+      expect(control.items.isRoot).toBe(true);
+      expect(control.items.hasParent).toBe(false);
+      expect(control.items.depth).toBe(-1);
+    });
+
+    it('1.11.7 depth grows from 0 and every Item names the RootContainer or an Item as parent', () => {
+      const control = setup();
+      const fruit = control.items[0];
+
+      expect(control.items.isRoot).toBe(true);
+      expect(control.items.hasParent).toBe(false);
+      expect(control.items.depth).toBe(-1);
+
+      expect(fruit.parent).toBe(control.items);
+      expect(fruit.depth).toBe(0);
+      expect(fruit[0].depth).toBe(1);
     });
   });
 
