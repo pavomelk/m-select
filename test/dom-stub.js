@@ -93,6 +93,13 @@ class ElementStub {
     this.children.push(node);
   }
 
+  insertBefore(node, reference) {
+    const i = this.children.indexOf(reference);
+    if (i >= 0) this.children.splice(i, 0, node);
+    else this.children.push(node);
+    return node;
+  }
+
   removeChild(node) {
     const i = this.children.indexOf(node);
     if (i >= 0) this.children.splice(i, 1);

@@ -31,6 +31,7 @@ Component should support lazy loading and postpone instantiation of Items to the
 |---|---|
 | *Control* | The whole m-select component (`combobox + listbox` extended pattern) |
 | *Item* | A single selectable/visible entry in the hierarchy |
+| *Root Container* | The root of the *Items* hierarchy — a separate Array-like object (not an *Item*) that is the parent of all top-level *Items* |
 | *Group Item* | An *Item* that contains child *Items* |
 | *Chip* | Visual representation of a selected *Item* inside the *Selection Box* |
 | *Collapsed Chip* | A single chip summarizing the count of selected *Items* |
@@ -99,6 +100,7 @@ Item maintains user selection aspects:
     
 *Control* should consist of parts that maintain clear separation of concerns yet they should be able to interact with each other.
     - It should have a component *Items* which implements composition pattern of individual *Item* objects
+    - The *Items* hierarchy is rooted in a *Root Container*: a separate Array-like object (not an *Item*) that is the parent of all top-level *Items* and provides `element`, array-like access and `depth = -1`. Every *Item* is created with a required `parent` (the *Root Container* or an owning *Group Item*) and attaches its own view to `parent.element`.
     - *Item* object should maintain its representation in web document as "Item" and "Chip". Selection of *Item* means placement of *Chip* in *SelectionBox* and conversely unselecting *Item* removes *Chip* from the *SelectionBox*
     - *Control* should have *SelectionBox* object which should contain *Filter* element that receives text input.
 	- *Filter* should be the only real *Control*'s tab stop.  

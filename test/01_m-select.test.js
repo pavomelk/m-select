@@ -1,7 +1,30 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MSelect, Item, RootContainer, Filter } from '../src/m-select.js';
 
+/**
+ * Behavioural spec for m-select.
+ *
+ * Each test locks one unit of behaviour and is written red-first. Groups are
+ * ordered roughly from primitives to composite behaviours, but the suite is
+ * NOT a strict build plan — the first checks of a group may rely on pieces
+ * added later. Use it as an executable roadmap.
+ *
+ * FOUNDATION SKELETON (must exist before group 1.1 can run):
+ *   - Item            construction, selected/toggle, chipView + itemView,
+ *                     current (view classes), definitionIndex
+ *   - RootContainer   owner interface (element, depth = -1, array-like over
+ *                     top-level Items) via Item.root()/RootContainer.build()
+ *   - SelectionBox    chips bookkeeping (items/chips arrays, add/remove)
+ *   - DropDown        itemsEl, item tree, open/close, currentItem/setCurrent
+ *   - Filter          input element, query/displaySelected
+ *   - MSelect         constructor composing the above, options handling,
+ *                     selectedItems/allItems/orderedChips, clearAll
+ *   - test/dom-stub.js  ElementStub: children array, append/insertBefore/
+ *                     removeChild, classList.toggle, innerHTML = '', dataset
+ */
+
 describe('1. MSelect', () => {
+  // requires: foundation + value uniqueness (reject duplicate non-empty values)
   describe('1. Items', () => {
     it('1.1.1 MSelect.items is a RootContainer, array-like over the top-level Items', () => {
       const host = document.createElement('div');
@@ -107,8 +130,40 @@ describe('1. MSelect', () => {
         });
       }).toThrow();
     });
+
+    it('1.1.7 the RootContainer accepts an optional DOM element at instantiation', () => {
+      const el = document.createElement('div');
+      const root = new RootContainer(el);
+      expect(root.element).toBe(el);
+
+      const viaItemRoot = Item.root([], {}, el);
+      expect(viaItemRoot.element).toBe(el);
+    });
+
+    it('1.1.8 Items are instantiated inside the DropDown on its itemsEl', () => {
+      const host = document.createElement('div');
+      const realRoot = Item.root;
+      let capturedArgs;
+      const rootSpy = vi.spyOn(Item, 'root').mockImplementation((...args) => {
+        capturedArgs = args;
+        return realRoot.call(Item, ...args);
+      });
+
+      const control = new MSelect(host, {
+        items: [{ value: 'a', label: 'A' }],
+      });
+      rootSpy.mockRestore();
+
+      expect(control.dropDown.items).toBeInstanceOf(RootContainer);
+      expect(capturedArgs[2]).toBe(control.dropDown.itemsEl);
+      expect(control.items).toBe(control.dropDown.items);
+      expect(control.dropDown.items.element).toBe(control.dropDown.itemsEl);
+      expect(control.dropDown.el.children).toContain(control.dropDown.itemsEl);
+      expect(control.dropDown.itemsEl.children).toContain(control.items[0].itemView);
+    });
   });
 
+  // requires: Item standalone construction over a scratch RootContainer
   describe('2. Item', () => {
     const root = Item.root([]);
 
@@ -151,6 +206,8 @@ describe('1. MSelect', () => {
     });
   });
 
+  // requires: group Items (spec.items), child container element + classes,
+  // per-level align (options.align)
   describe('3. Item children container', () => {
     it('1.3.1 a group Item children container holds the itemViews of its immediate children', () => {
       const host = document.createElement('div');
@@ -244,6 +301,8 @@ describe('1. MSelect', () => {
     });
   });
 
+  // requires: SelectionBox add/chip lookup, items/chips arrays, chip placement
+  // order (orderedChips), clear/unselect wiring
   describe('4. SelectionBox', () => {
     it('1.4.1 SelectionBox can add Item.chipView element', () => {
       const host = document.createElement('div');
@@ -305,6 +364,7 @@ describe('1. MSelect', () => {
     });
   });
 
+  // requires: Item#toggle -> control.onItemToggled -> SelectionBox.add/remove
   describe('5. Item toggling <-> SelectionBox', () => {
     it('1.5.1 Item toggled to Selected gets a Chip added in SelectionBox', () => {
       const host = document.createElement('div');
@@ -387,6 +447,7 @@ describe('1. MSelect', () => {
     });
   });
 
+  // requires: DropDown.filter(query) -> Filter -> item.visible + hidden class
   describe('6. DropDown filtering', () => {
     it('1.6.1 DropDown#filter(textValue) defaults to matching Items whose label contains textValue', () => {
       const host = document.createElement('div');
@@ -501,6 +562,7 @@ describe('1. MSelect', () => {
     });
   });
 
+  // requires: group toggle propagation to children, partiallySelected state
   describe('7. Group Item toggling', () => {
     it('1.7.1 toggleScope "all": toggling a Group toggles all children into the same state regardless of visibility', () => {
       const host = document.createElement('div');
@@ -741,6 +803,8 @@ describe('1. MSelect', () => {
     });
   });
 
+  // requires: options.chipPlaceOrder (asPicked/asDefined/alphabetical),
+  // orderedChips, setChipPlaceOrder, SelectionBox.add ordered insertion
   describe('8. Chip placement order', () => {
     const items = [
       { value: 'c', label: 'Charlie' },
@@ -817,8 +881,83 @@ describe('1. MSelect', () => {
       control.selectionBox.render();
       expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Charlie', 'Alpha', 'Bravo']);
     });
+
+    it('1.8.5 add() appends chipViews in "asPicked" (selection) order', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, { items });
+      const [c, a, b] = [...control.items];
+
+      b.selected = true;
+      control.selectionBox.add(b);
+      a.selected = true;
+      control.selectionBox.add(a);
+      c.selected = true;
+      control.selectionBox.add(c);
+
+      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Bravo', 'Alpha', 'Charlie']);
+    });
+
+    it('1.8.6 add() inserts chipViews in "alphabetical" position', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { chipPlaceOrder: 'alphabetical' },
+        items,
+      });
+      const [c, a, b] = [...control.items];
+
+      c.selected = true;
+      control.selectionBox.add(c);
+      a.selected = true;
+      control.selectionBox.add(a);
+      b.selected = true;
+      control.selectionBox.add(b);
+
+      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    });
+
+    it('1.8.7 add() inserts chipViews in "asDefined" position', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { chipPlaceOrder: 'asDefined' },
+        items,
+      });
+      const [c, a, b] = [...control.items];
+
+      b.selected = true;
+      control.selectionBox.add(b);
+      a.selected = true;
+      control.selectionBox.add(a);
+      c.selected = true;
+      control.selectionBox.add(c);
+
+      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Charlie', 'Alpha', 'Bravo']);
+    });
+
+    it('1.8.8 after a runtime switch, add() respects the new order for subsequent chips', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [...items, { value: 'd', label: 'Delta' }],
+      });
+      const [c, a, b, d] = [...control.items];
+
+      d.selected = true;
+      control.selectionBox.add(d);
+      b.selected = true;
+      control.selectionBox.add(b);
+      control.selectionBox.render();
+
+      control.setChipPlaceOrder('alphabetical');
+      control.selectionBox.render();
+      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Bravo', 'Delta']);
+
+      a.selected = true;
+      control.selectionBox.add(a);
+      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Alpha', 'Bravo', 'Delta']);
+    });
   });
 
+  // requires: dropDown.setCurrent/currentItem, Item.current reflected on
+  // itemView/chipView (cm-*-current), SelectionBox.selectFirst/Last/Next/Prev
   describe('9. Chip movement - Current marker', () => {
     const setup = () => {
       const host = document.createElement('div');
@@ -941,6 +1080,7 @@ describe('1. MSelect', () => {
     });
   });
 
+  // requires: open()/close(), setCurrent scrolls into view while open
   describe('10. DropDown - scroll current into view', () => {
     const setup = () => {
       const host = document.createElement('div');
@@ -997,6 +1137,7 @@ describe('1. MSelect', () => {
     });
   });
 
+  // requires: RootContainer depth/flatten, dropDown tree navigation
   describe('11. Item tree navigation', () => {
     const setup = () => {
       const host = document.createElement('div');
@@ -1099,6 +1240,7 @@ describe('1. MSelect', () => {
     });
   });
 
+  // requires: MSelect.toggleAll, DropDown.selectAllBtn
   describe('12. DropDown - select all button', () => {
     const setup = () => {
       const host = document.createElement('div');
@@ -1135,6 +1277,8 @@ describe('1. MSelect', () => {
     });
   });
 
+  // requires: Filter.el input element, query/displaySelected semantics,
+  // input event -> MSelect render
   describe('13. Filter input element', () => {
     const setup = () => {
       const host = document.createElement('div');
@@ -1363,6 +1507,225 @@ describe('1. MSelect', () => {
       expect(control.items[0].visible).toBe(true);
       expect(control.items[1].visible).toBe(false);
       expect(control.items[2].visible).toBe(false);
+    });
+  });
+
+  // requires: options.maxVisibleChips, CollapsedChip (chipView, current,
+  // update), SelectionBox.isCollapsed state, keepCollapsed flag
+  describe('14. Collapsed Chip', () => {
+    const setup = (extraItems) => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { maxVisibleChips: 2 },
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+          ...(extraItems || []),
+        ],
+      });
+      return control;
+    };
+
+    it('1.14.1 the CollapsedChip is instantiated in the SelectionBox only when maxVisibleChips is specified', () => {
+      const host = document.createElement('div');
+      const without = new MSelect(host, { items: [] });
+      expect(without.selectionBox.collapsedChip).toBeNull();
+
+      const withMax = setup();
+      expect(withMax.selectionBox.collapsedChip).toBeTruthy();
+      expect(
+        withMax.selectionBox.collapsedChip.chipView.classList.contains('cm-chip--summary')
+      ).toBe(true);
+    });
+
+    it('1.14.2 the CollapsedChip label shows "<N> items selected" refreshed with the selection count', () => {
+      const control = setup([{ value: 'd', label: 'Delta' }]);
+      for (const item of control.items) item.toggle(true);
+      expect(control.selectionBox.collapsedChip.chipView.textContent).toBe('4 items selected');
+
+      control.unselectItem(control.items[3]);
+      expect(control.selectionBox.collapsedChip.chipView.textContent).toBe('3 items selected');
+    });
+
+    it('1.14.3 once the count exceeds maxVisibleChips, all individual chips are replaced by the single CollapsedChip', () => {
+      const control = setup();
+      for (const item of control.items) item.toggle(true);
+
+      expect(control.selectionBox.chipsEl.children).toHaveLength(1);
+      expect(control.selectionBox.chipsEl.children[0]).toBe(
+        control.selectionBox.collapsedChip.chipView
+      );
+      const hasIndividualChip = [...control.items].some((item) =>
+        control.selectionBox.chipsEl.children.includes(item.chipView)
+      );
+      expect(hasIndividualChip).toBe(false);
+    });
+
+    it('1.14.4 while count <= maxVisibleChips the individual chips are shown and the CollapsedChip is not rendered', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+
+      expect(control.selectionBox.chipsEl.children).toHaveLength(2);
+      expect(control.selectionBox.chipsEl.children).not.toContain(
+        control.selectionBox.collapsedChip.chipView
+      );
+    });
+
+    it('1.14.5 unselecting back to the limit restores the individual chips', () => {
+      const control = setup();
+      for (const item of control.items) item.toggle(true);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+
+      control.unselectItem(control.items[0]);
+
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      expect(control.selectionBox.chipsEl.children).toHaveLength(2);
+      expect(control.selectionBox.chipsEl.children).toContain(control.items[1].chipView);
+      expect(control.selectionBox.chipsEl.children).toContain(control.items[2].chipView);
+    });
+
+    it('1.14.6 the CollapsedChip has no removal ("x") element', () => {
+      const control = setup();
+      for (const item of control.items) item.toggle(true);
+
+      const collapsed = control.selectionBox.collapsedChip.chipView;
+      expect(collapsed.children.every((el) => !el.classList.contains('cm-chip__x'))).toBe(true);
+    });
+
+    it('1.14.7 the CollapsedChip "current" flag toggles the cm-chip--current class on its view', () => {
+      const control = setup();
+      const collapsed = control.selectionBox.collapsedChip;
+
+      collapsed.current = true;
+      expect(collapsed.chipView.classList.contains('cm-chip--current')).toBe(true);
+
+      collapsed.current = false;
+      expect(collapsed.chipView.classList.contains('cm-chip--current')).toBe(false);
+    });
+
+    it('1.14.8 while collapsed, the SelectionBox keeps tracking the individual chips (state persistence)', () => {
+      const control = setup();
+      for (const item of control.items) item.toggle(true);
+
+      expect(control.selectionBox.items).toHaveLength(3);
+      expect(control.selectionBox.chips).toHaveLength(3);
+      expect(control.selectionBox.chip('b')).toBe(control.items[1]);
+      expect(control.selectionBox.chipsEl.children).toHaveLength(1);
+    });
+
+    it('1.14.9 add() collapses immediately once the count exceeds maxVisibleChips (no render needed)', () => {
+      const control = setup();
+      const [a, b, c] = [...control.items];
+
+      a.selected = true;
+      control.selectionBox.add(a);
+      b.selected = true;
+      control.selectionBox.add(b);
+      expect(control.selectionBox.chipsEl.children).toHaveLength(2);
+
+      c.selected = true;
+      control.selectionBox.add(c);
+
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      expect(control.selectionBox.chipsEl.children).toHaveLength(1);
+      expect(control.selectionBox.chipsEl.children[0]).toBe(
+        control.selectionBox.collapsedChip.chipView
+      );
+      expect(control.selectionBox.collapsedChip.chipView.textContent).toBe('3 items selected');
+    });
+
+    it('1.14.10 remove() expands immediately once the count drops to maxVisibleChips (no render needed)', () => {
+      const control = setup();
+      const [a, b, c] = [...control.items];
+
+      for (const item of control.items) {
+        item.selected = true;
+        control.selectionBox.add(item);
+      }
+      expect(control.selectionBox.isCollapsed).toBe(true);
+
+      c.selected = false;
+      control.selectionBox.remove(c);
+
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      expect(control.selectionBox.chipsEl.children).toHaveLength(2);
+      expect(control.selectionBox.chipsEl.children).toContain(a.chipView);
+      expect(control.selectionBox.chipsEl.children).toContain(b.chipView);
+      expect(control.selectionBox.chipsEl.children).not.toContain(
+        control.selectionBox.collapsedChip.chipView
+      );
+    });
+
+    it('1.14.11 add()/remove() while still collapsed only refresh the summary label', () => {
+      const control = setup([{ value: 'd', label: 'Delta' }]);
+      for (const item of control.items) {
+        item.selected = true;
+        control.selectionBox.add(item);
+      }
+      expect(control.selectionBox.collapsedChip.chipView.textContent).toBe('4 items selected');
+
+      control.items[3].selected = false;
+      control.selectionBox.remove(control.items[3]);
+
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      expect(control.selectionBox.collapsedChip.chipView.textContent).toBe('3 items selected');
+      expect(control.selectionBox.chipsEl.children).toHaveLength(1);
+      expect(control.selectionBox.chipsEl.children[0]).toBe(
+        control.selectionBox.collapsedChip.chipView
+      );
+    });
+
+    it('1.14.12 the keepCollapsed flag defaults to false', () => {
+      const control = setup();
+      expect(control.selectionBox.keepCollapsed).toBe(false);
+    });
+
+    it('1.14.13 with keepCollapsed, remove() keeps the Collapsed chip while at least one Item remains selected', () => {
+      const control = setup([{ value: 'd', label: 'Delta' }]);
+      control.selectionBox.keepCollapsed = true;
+      for (const item of control.items) {
+        item.selected = true;
+        control.selectionBox.add(item);
+      }
+      expect(control.selectionBox.isCollapsed).toBe(true);
+
+      control.items[3].selected = false;
+      control.selectionBox.remove(control.items[3]);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      expect(control.selectionBox.chipsEl.children).toHaveLength(1);
+      expect(control.selectionBox.chipsEl.children[0]).toBe(
+        control.selectionBox.collapsedChip.chipView
+      );
+      expect(control.selectionBox.collapsedChip.chipView.textContent).toBe('3 items selected');
+
+      control.items[2].selected = false;
+      control.selectionBox.remove(control.items[2]);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      expect(control.selectionBox.chipsEl.children).toHaveLength(1);
+      expect(control.selectionBox.collapsedChip.chipView.textContent).toBe('2 items selected');
+    });
+
+    it('1.14.14 with keepCollapsed, removing the last Item expands the box', () => {
+      const control = setup();
+      control.selectionBox.keepCollapsed = true;
+      for (const item of control.items) {
+        item.selected = true;
+        control.selectionBox.add(item);
+      }
+      expect(control.selectionBox.isCollapsed).toBe(true);
+
+      for (const item of [...control.items].reverse()) {
+        item.selected = false;
+        control.selectionBox.remove(item);
+      }
+
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      expect(control.selectionBox.chipsEl.children).toHaveLength(0);
+      expect(control.selectionBox.chipsEl.children).not.toContain(
+        control.selectionBox.collapsedChip.chipView
+      );
     });
   });
 });

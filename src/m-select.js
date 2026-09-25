@@ -50,7 +50,12 @@ const normalizeBool = (value) => value !== false && String(value) !== 'false';
  * Items. In a component, its `element` is the one managed by the DropDown.
  */
 export class RootContainer {
-  constructor() {
+  /**
+   * @param {HTMLElement} [element] the node the top-level `itemView`s attach
+   * to; the container adopts it as its `element`. When omitted the container
+   * creates its own node.
+   */
+  constructor(element) {
     this.depth = -1;
     this.isRoot = true;
     this.hasParent = false;
@@ -58,8 +63,10 @@ export class RootContainer {
     // parent holds its children, so it has `length >= 1`.
     this.parent = Object.freeze([]);
 
-    this.element = document.createElement('div');
-    this.element.className = 'cm-items';
+    this.element = element || document.createElement('div');
+    if (!element) {
+      this.element.className = 'cm-items';
+    }
   }
 
   /** @private array of registered top-level Items (mirrored by numeric keys). */
@@ -112,10 +119,11 @@ export class RootContainer {
    * Each top-level Item receives the container as its `parent`.
    * @param {object[]} [specs]
    * @param {object} [options]
+   * @param {HTMLElement} [element] node the container adopts as its `element`
    * @returns {RootContainer}
    */
-  static build(specs, options) {
-    const container = new RootContainer();
+  static build(specs, options, element) {
+    const container = new RootContainer(element);
     (specs || []).forEach((spec, index) => {
       const item = spec instanceof Item ? spec : new Item(spec, options, index, container);
       container.add(item);
@@ -171,10 +179,11 @@ export class Item {
    * Items). Its `element` holds the top-level `itemView`s.
    * @param {object[]} [specs]
    * @param {object} [options]
+   * @param {HTMLElement} [element] node the container adopts as its `element`
    * @returns {RootContainer}
    */
-  static root(children, options) {
-    return RootContainer.build(children, options);
+  static root(children, options, element) {
+    return RootContainer.build(children, options, element);
   }
 
   /** @private array of child Items in tree order (mirrored by numeric keys). */
@@ -558,6 +567,38 @@ export class Filter {
 }
 
 /** Always-visible part of the control: chips + filter + clear-all. */
+/** The summary chip shown when the selection count exceeds `maxVisibleChips`. */
+class CollapsedChip {
+  constructor() {
+    this.chipView = document.createElement('span');
+    this.chipView.className = 'cm-chip cm-chip--summary';
+    this.chipView.title = 'Individual items must be unselected via the dropdown';
+  }
+
+  /** @private backing field for the current property */
+  #current = false;
+
+  /**
+   * Whether this chip is the current navigation target. Reads return the
+   * current state; assigning a boolean marks (true) or unmarks (false) it.
+   * @param {boolean} [value]
+   * @returns {boolean}
+   */
+  get current() {
+    return this.#current;
+  }
+
+  set current(value) {
+    this.#current = Boolean(value);
+    this.chipView.classList.toggle('cm-chip--current', this.#current);
+  }
+
+  /** Refreshes the label from the given number of selected Items. */
+  update(count) {
+    this.chipView.textContent = `${count} items selected`;
+  }
+}
+
 class SelectionBox {
   /**
    * @param {MSelect} control
@@ -577,6 +618,11 @@ class SelectionBox {
 
     this.filter = new Filter(this.control);
 
+    this.collapsedChip =
+      this.control.options.maxVisibleChips != null ? new CollapsedChip() : null;
+
+    this.keepCollapsed = false;
+
     this.el.append(this.chipsEl, this.filter.el, this.clearBtn);
 
     this.clearBtn.addEventListener('click', () => this.control.clearAll());
@@ -584,9 +630,27 @@ class SelectionBox {
     this.chipsEl.addEventListener('click', (e) => this.control.onChipClick(e));
   }
 
+  /** @private backing field: whether the selection is shown as a CollapsedChip. */
+  #collapsed = false;
+
+  /**
+   * Whether the selection is currently shown as a CollapsedChip. Maintained by
+   * add()/remove()/render(); with `keepCollapsed`, an achieved collapse is held
+   * until the last Item is removed.
+   */
   get isCollapsed() {
+    return this.#collapsed;
+  }
+
+  /** Recomputes the displayed collapse state from the selection count. */
+  #updateCollapsedState() {
     const max = this.control.options.maxVisibleChips;
-    return max != null && this.control.selectedItems.length > max;
+    if (max == null) {
+      this.#collapsed = false;
+      return;
+    }
+    const count = this.control.selectedItems.length;
+    this.#collapsed = count > max || (this.#collapsed && this.keepCollapsed && count > 0);
   }
 
   /**
@@ -596,7 +660,23 @@ class SelectionBox {
   add(item) {
     this.items.push(item);
     this.chips.push(item.chipView);
-    this.chipsEl.append(item.chipView);
+    this.#updateCollapsedState();
+
+    if (this.isCollapsed) {
+      this.chipsEl.innerHTML = '';
+      this.collapsedChip.update(this.control.selectedItems.length);
+      this.chipsEl.append(this.collapsedChip.chipView);
+      return;
+    }
+
+    const list = this.control.orderedChips();
+    const index = list.indexOf(item);
+    const next = list[index + 1];
+    if (next) {
+      this.chipsEl.insertBefore(item.chipView, next.chipView);
+    } else {
+      this.chipsEl.append(item.chipView);
+    }
   }
 
   /**
@@ -604,13 +684,23 @@ class SelectionBox {
    * @param {Item} item
    */
   remove(item) {
+    const wasCollapsed = this.isCollapsed;
     const itemIndex = this.items.indexOf(item);
     if (itemIndex >= 0) this.items.splice(itemIndex, 1);
 
     const chipIndex = this.chips.indexOf(item.chipView);
     if (chipIndex >= 0) this.chips.splice(chipIndex, 1);
 
-    if (this.chipsEl.children.includes(item.chipView)) {
+    this.#updateCollapsedState();
+
+    if (this.isCollapsed) {
+      this.chipsEl.innerHTML = '';
+      this.collapsedChip.update(this.control.selectedItems.length);
+      this.chipsEl.append(this.collapsedChip.chipView);
+    } else if (wasCollapsed) {
+      this.chipsEl.innerHTML = '';
+      this.control.orderedChips().forEach((item) => this.chipsEl.append(item.chipView));
+    } else if (this.chipsEl.children.includes(item.chipView)) {
       this.chipsEl.removeChild(item.chipView);
     }
 
@@ -662,9 +752,11 @@ class SelectionBox {
   }
 
   render() {
+    this.#updateCollapsedState();
     this.chipsEl.innerHTML = '';
     if (this.isCollapsed) {
-      this.chipsEl.append(this.control.collapsedChipEl());
+      this.collapsedChip.update(this.control.selectedItems.length);
+      this.chipsEl.append(this.collapsedChip.chipView);
     } else {
       this.control.orderedChips().forEach((item) => this.chipsEl.append(item.chipView));
     }
@@ -673,7 +765,7 @@ class SelectionBox {
 
 /** Collapsible part: the filtered item tree and the "select all" button. */
 class DropDown {
-  constructor(control) {
+  constructor(control, itemsSpecs, options) {
     this.control = control;
     this.el = document.createElement('div');
     this.el.className = 'cm-dropdown';
@@ -686,8 +778,12 @@ class DropDown {
     this.selectAllBtn.addEventListener('click', () => this.control.toggleAll());
 
     this.toolbarEl.append(this.selectAllBtn);
-    this.itemsEl = this.control.items.element;
+
+    this.itemsEl = document.createElement('div');
+    this.itemsEl.className = 'cm-items';
     this.el.append(this.toolbarEl, this.itemsEl);
+
+    this.items = Item.root(itemsSpecs || [], options, this.itemsEl);
   }
 
   /** @private backing field: whether the "Select All" button is displayed. */
@@ -832,10 +928,9 @@ export class MSelect {
     this.options = config.options || {};
     this.logger = new Logger(this.options.logLevel || 'silent');
 
-    this.items = Item.root(config.items || [], this.options);
+    this.dropDown = new DropDown(this, config.items, this.options);
     this.#assertUniqueValues();
     this.selectionBox = new SelectionBox(this);
-    this.dropDown = new DropDown(this);
     this.allItems.forEach((item) => {
       item.owner = this;
     });
@@ -871,6 +966,11 @@ export class MSelect {
       }
       seen.add(value);
     }
+  }
+
+  /** The root of the Item tree, created inside the DropDown on its itemsEl. */
+  get items() {
+    return this.dropDown.items;
   }
 
   get allItems() {
@@ -967,17 +1067,6 @@ export class MSelect {
       e.stopPropagation();
       this.unselectItem(x._item);
     }
-  }
-
-  /**
-   * @param {Item} item
-   */
-  collapsedChipEl() {
-    const chip = document.createElement('span');
-    chip.className = 'cm-chip cm-chip--summary';
-    chip.title = 'Individual items must be unselected via the dropdown';
-    chip.textContent = `${this.selectedItems.length} items selected${this.selectedItems.length ? '' : ''}`;
-    return chip;
   }
 
   render() {

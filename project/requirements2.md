@@ -24,6 +24,7 @@
 | *Selection Box* | Always-visible part of the control |
 | *Drop Down* | Collapsible part containing the *Items* |
 | *Item* | A selectable option / entry in the hierarchy |
+| *Root Container* | The single root of the *Items* hierarchy — a separate Array-like object (not an *Item*) that is the parent of all top-level *Items* |
 | *Chip* | Visual representation of a selected *Item* in the *Selection Box* |
 | *Collapsed Chip* | A single chip that indicates the number of selected *Items* |
 | *Filter* | Text input narrowing the scope of shown *Items* |
@@ -45,6 +46,9 @@
 - [ ] `REQ-3.1-04` It has a *Selection Box* object and a *Text* input object. *(P0)*
 - [ ] `REQ-3.1-05` Lower-level parts provide clear separation of concerns yet interact with each other. *(P1)*
 - [ ] `REQ-3.1-06` *Items* are implemented with the Composite pattern; navigation and selection logic is shared within the composition. *(P1)*
+- [ ] `REQ-3.1-07` The *Items* hierarchy is rooted in a *Root Container* — a separate Array-like object (not an *Item*) that serves as the parent of all top-level *Items*. *(P0)*
+- [ ] `REQ-3.1-08` The *Root Container* is the only node without a parent; every *Item*'s parent is either the *Root Container* (top-level) or an owning *Group Item*. *(P0)*
+- [ ] `REQ-3.1-09` The *Root Container* provides the owner interface its *Items* require: an `element` (the node the top-level *Item* views attach to), `depth = -1`, and array-like access (numeric keys, `length`, iteration) over its top-level *Items*. *(P0)*
 
 ### 3.2 Item
 - [ ] `REQ-3.2-01` An *Item* presents a user selection. *(P0)*
@@ -54,6 +58,9 @@
 - [ ] `REQ-3.2-05` Non-mutually-exclusive states can be combined unless stated otherwise. *(P1)*
 - [ ] `REQ-3.2-06` Every item can be navigated to with mouse and keyboard. *(P0)*
 - [ ] `REQ-3.2-07` An item may optionally be given a `title` property; when present it is rendered as a native tooltip (HTML `title`) on both the *Item* DOM element and its *Chip* DOM element. Default: omitted, no tooltip. *(P2)*
+- [ ] `REQ-3.2-08` *Item* `parent` is a required constructor argument, fixed at construction: the *Root Container* for top-level *Items*, an owning *Group Item* otherwise. There is no parent-less *Item* inside a component. *(P0)*
+- [ ] `REQ-3.2-09` An *Item* attaches its own view into `parent.element` by itself during construction (child-side attach); the parent does not append its children. *(P0)*
+- [ ] `REQ-3.2-10` *Item* depth = `parent.depth + 1`; top-level *Items* are at depth 0 because the *Root Container* reports depth −1. *(P0)*
 
 ### 3.3 Group Item
 - [ ] `REQ-3.3-01` A *Group Item* contains other items (Child Items). *(P0)*
