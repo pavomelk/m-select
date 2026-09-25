@@ -32,4 +32,6 @@ window.addEventListener('beforeunload', () => clearInterval(timer));
 reflect();
 
 app.append(state);
+window.control = control;
+
 
