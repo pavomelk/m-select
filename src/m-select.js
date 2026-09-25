@@ -43,6 +43,13 @@ export class Logger {
 const normalizeBool = (value) => value !== false && String(value) !== 'false';
 
 /**
+ * Sentinel "parent" of the root Item. A shared empty array can never be a real
+ * parent — a real parent contains its children, so it has `length >= 1` — and
+ * thus `parent.length === 0` unambiguously marks the root level.
+ */
+const EMPTY_PARENT = Object.freeze([]);
+
+/**
  * Single option tree node: either a Leaf Item or a Group Item with children.
  */
 export class Item {
@@ -52,34 +59,88 @@ export class Item {
    * @param {object} [options] component options (e.g. `align` per level)
    * @param {number} [definitionIndex]
    */
-  constructor(spec, options = {}, definitionIndex = 0) {
-    if (spec.label === undefined || spec.label === null || spec.label === '') {
+  constructor(spec = {}, options = {}, definitionIndex = 0) {
+    const root = Boolean(spec && spec.__root);
+    if (!root && (spec.label === undefined || spec.label === null || spec.label === '')) {
       throw new Error('Item without label is not allowed');
     }
     this.options = options;
-    this.label = spec.label;
-    this.value = spec.value;
-    this.selectable = normalizeBool(spec.selectable);
+    this.label = root ? undefined : spec.label;
+    this.value = root ? undefined : spec.value;
+    this.selectable = root ? false : normalizeBool(spec.selectable);
 
-    const childItems = (spec.items || []).map((child, i) => new Item(child, options, 0));
-    const container = document.createElement('div');
-    container.className = 'cm-item__children';
-    if ((options.align || {})[this.depth] === 'row') {
-      container.classList.add('cm-item__children--row');
-    }
-    this.children = new Items(container, childItems);
-
+    this.#root = root;
     this.definitionIndex = definitionIndex;
-    this.isGroup = this.children.length > 0;
-    this.selected = Boolean(spec.selected);
-    this.#visible = spec.visible === undefined ? true : Boolean(spec.visible);
-    this.parent = null;
+    this.isGroup = false;
+    this.selected = root ? false : Boolean(spec.selected);
+    this.#visible = root ? true : spec.visible === undefined ? true : Boolean(spec.visible);
+    this.parent = root ? EMPTY_PARENT : null;
     this.owner = null;
-    for (const child of this.children) {
-      child.parent = this;
+
+    this.element = document.createElement('div');
+    this.element.className = root ? 'cm-items' : 'cm-item__children';
+    if (!root && (options.align || {})[this.depth] === 'row') {
+      this.element.classList.add('cm-item__children--row');
     }
-    this.#createDOM();
-    this.syncView();
+
+    if (!root) {
+      this.#adopt((spec.items || []).map((child, i) => new Item(child, options, 0)));
+      this.#createDOM();
+      this.syncView();
+    }
+  }
+
+  /**
+   * Creates the root Item that owns the given top-level specs. The root has no
+   * own row (`itemView`) — its `element` holds the top-level `itemView`s — and
+   * behaves as an array-like container over them.
+   * @param {object[]} [specs]
+   * @param {object} [options]
+   * @returns {Item}
+   */
+  static root(children, options) {
+    const root = new Item({ __root: true }, options);
+    root.#adopt(
+      (children || []).map((child) => (child instanceof Item ? child : new Item(child, options))),
+    );
+    root.isGroup = root.length > 0;
+    return root;
+  }
+
+  /** @private true for the root container Item built by `Item.root`. */
+  #root = false;
+
+  /** @private array of child Items in tree order (mirrored by numeric keys). */
+  #children = [];
+
+  /**
+   * Adopts the given child Items: stores them under numeric keys (`item[0]`,
+   * `item[1]`, …), links each child back, and appends its `itemView` to
+   * `element`.
+   * @param {Item[]} children
+   */
+  #adopt(children) {
+    this.#children = children;
+    this.isGroup = children.length > 0;
+    children.forEach((child, index) => {
+      child.parent = this;
+      this.element.append(child.itemView);
+      Object.defineProperty(this, index, {
+        get: () => this.#children[index],
+        configurable: true,
+        enumerable: true,
+      });
+    });
+  }
+
+  /** Number of direct child Items. */
+  get length() {
+    return this.#children.length;
+  }
+
+  /** Iterates over the direct child Items, enabling `for…of` and spread. */
+  [Symbol.iterator]() {
+    return this.#children[Symbol.iterator]();
   }
 
   /**
@@ -126,12 +187,9 @@ export class Item {
   /** @private backing field for the current property */
   #current = false;
 
-  /** @private containing Items composition; set by the owning Items instance. */
-  siblingContainer = null;
-
-  /** The Items composition holding this Item. */
+  /** The Item or the root sentinel (`EMPTY_PARENT`) holding this Item. */
   get container() {
-    return this.siblingContainer;
+    return this.parent;
   }
 
   /**
@@ -143,52 +201,66 @@ export class Item {
     return this.isGroup || (this.selectable && this.value !== undefined);
   }
 
-  /** Depth in the tree (0 = root level). */
+  /**
+   * Depth in the tree (0 = root level). The root Item itself reports -1 (its
+   * `parent` is the empty sentinel) so its children resolve to depth 0; a
+   * standalone Item without any parent is depth 0 as well.
+   */
   get depth() {
-    return this.parent ? this.parent.depth + 1 : 0;
+    if (!this.parent) return 0;
+    if (this.parent.length === 0) return -1;
+    return this.parent.depth + 1;
   }
 
   /** The immediately following sibling Item, or null when this is the last. */
   get nextSibling() {
-    if (!this.siblingContainer) return null;
-    const siblings = this.siblingContainer.list;
+    if (!this.parent) return null;
+    const siblings = [...this.parent];
     const index = siblings.indexOf(this);
     return index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : null;
   }
 
   /** The immediately preceding sibling Item, or null when this is the first. */
   get previousSibling() {
-    if (!this.siblingContainer) return null;
-    const siblings = this.siblingContainer.list;
+    if (!this.parent) return null;
+    const siblings = [...this.parent];
     const index = siblings.indexOf(this);
     return index > 0 ? siblings[index - 1] : null;
   }
 
   /** The first Item in the same sibling set as this Item. */
   get firstSibling() {
-    if (!this.siblingContainer) return null;
-    return this.siblingContainer.list[0];
+    if (!this.parent) return null;
+    return this.parent[0];
   }
 
   /** The last Item in the same sibling set as this Item. */
   get lastSibling() {
-    if (!this.siblingContainer) return null;
-    const siblings = this.siblingContainer.list;
+    if (!this.parent) return null;
+    const siblings = [...this.parent];
     return siblings[siblings.length - 1];
   }
 
   get selectableCount() {
     if (!this.isGroup) {
-      return this.selectable ? (this.value !== undefined ? 1 : 0) : 0;
+      return this.isSelectable ? 1 : 0;
     }
-    return this.children.reduce((sum, c) => sum + c.selectableCount, 0);
+    let sum = 0;
+    for (const child of this) {
+      sum += child.selectableCount;
+    }
+    return sum;
   }
 
   get selectedCount() {
     if (!this.isGroup) {
-      return this.selected ? 1 : 0;
+      return this.selected && this.isSelectable ? 1 : 0;
     }
-    return this.children.reduce((sum, c) => sum + c.selectedCount, 0);
+    let sum = 0;
+    for (const child of this) {
+      sum += child.selectedCount;
+    }
+    return sum;
   }
 
   /** Selection state used for the group tick: none | partial | all. */
@@ -201,27 +273,60 @@ export class Item {
     return 'partial';
   }
 
+  /** Depth-first flattening of this Item's children (and their descendants). */
+  flatten() {
+    const result = [];
+    const walk = (node) => {
+      result.push(node);
+      for (const child of node) {
+        walk(child);
+      }
+    };
+    for (const child of this) {
+      walk(child);
+    }
+    return result;
+  }
+
+  /** All descendants that are selectable and carry a value. */
+  get selectableItems() {
+    return this.flatten().filter((i) => i.selectable && i.value !== undefined);
+  }
+
   /**
    * Changes the selection state. Non-selectable Items (leaf without value)
    * cannot be toggled into "Selected".
-   * Group Items cascade to their children following `groupItems.toggleScope`:
-   * - 'all' (default): toggles every child into the same state, regardless of
-   *   the child's visibility.
-   * - 'visible': toggles only the visible children.
-   * @param {boolean} [force] if given, sets the state instead of toggling
+   *
+   * Calling protocol:
+   * - `toggle()` flips this Item's own state; a Group Item then hands the
+   *   resulting state to each child via `child.toggle(after)`.
+   * - `toggle(state)` is the child side of that cascade: this Item decides on
+   *   its own whether it follows, per `groupItems.toggleScope`:
+   *   - `'all'`: follows regardless of visibility.
+   *   - `'visible'` (default): follows only while visible.
+   * An Item that decides to follow cascades the state further down, letting
+   * each of its own children decide in turn.
+   * @param {boolean} [state] target state handed down by this Item's parent
    * @returns {boolean} the resulting selected state
    */
-  toggle(force) {
+  toggle(state) {
     if (!this.isSelectable) return this.selected;
-    const after = force === undefined ? !this.selected : Boolean(force);
+
+    const prompted = state !== undefined;
+    const after = prompted ? Boolean(state) : !this.selected;
+
+    if (prompted) {
+      const scope = (this.options.groupItems || {}).toggleScope || 'visible';
+      if (!(scope === 'all' || (scope === 'visible' && this.visible))) {
+        return this.selected;
+      }
+    }
+
     this.selected = after;
 
     if (this.isGroup) {
-      const scope = (this.options.groupItems || {}).toggleScope || 'visible';
-      for (const child of this.children) {
-        if (scope === 'all' || (scope === 'visible' && child.visible)) {
-          child.toggle(after);
-        }
+      for (const child of this) {
+        child.toggle(after);
       }
     }
 
@@ -264,7 +369,7 @@ export class Item {
     li.append(row);
 
     if (this.isGroup) {
-      li.append(this.children.element);
+      li.append(this.element);
     }
 
     this.itemView = li;
@@ -313,103 +418,8 @@ export class Item {
 }
 
 /**
- * Composition of Items (Composite pattern). Shared navigation and selection
- * logic over the contained Items. Array-like facade over an internal list.
- * Owns a single DOM element that holds the `itemView` of each Item it contains
- * as an immediate child.
+ * Text input narrowing the visible Items via a debounced `DropDown.filter` call.
  */
-export class Items {
-  /**
-   * @param {HTMLElement} element DOM placeholder holding the itemViews
-   * @param {Item[]} [list]
-   */
-  constructor(element, list = []) {
-    if (!element || element.nodeType !== 1) {
-      throw new Error('Items requires a DOM element');
-    }
-    this.element = element;
-    this.list = list;
-    this.list.forEach((item) => {
-      item.siblingContainer = this;
-      this.element.append(item.itemView);
-    });
-  }
-
-  get length() {
-    return this.list.length;
-  }
-
-  /**
-   * @param {number} index
-   * @returns {Item|undefined}
-   */
-  at(index) {
-    return this.list[index];
-  }
-
-  /**
-   * @param {(item: Item) => void} fn
-   */
-  forEach(fn) {
-    this.list.forEach(fn);
-  }
-
-  /**
-   * @param {(item: Item, index: number) => *} fn
-   * @returns {*[]}
-   */
-  map(fn) {
-    return this.list.map(fn);
-  }
-
-  /**
-   * @param {(item: Item) => boolean} fn
-   * @returns {boolean}
-   */
-  some(fn) {
-    return this.list.some(fn);
-  }
-
-  /**
-   * @template T
-   * @param {(acc: T, item: Item) => T} fn
-   * @param {T} initial
-   * @returns {T}
-   */
-  reduce(fn, initial) {
-    return this.list.reduce(fn, initial);
-  }
-
-  /** @param {Item} item */
-  add(item) {
-    item.siblingContainer = this;
-    this.list.push(item);
-    this.element.append(item.itemView);
-    return this;
-  }
-
-  /** Depth-first flattening of the contained Items (and their descendants). */
-  flatten() {
-    const result = [];
-    const walk = (node) => {
-      result.push(node);
-      node.children.forEach(walk);
-    };
-    this.list.forEach(walk);
-    return result;
-  }
-
-  /** All Items (including descendants) that are selectable and carry a value. */
-  get selectableItems() {
-    return this.flatten().filter((i) => i.selectable && i.value !== undefined);
-  }
-
-  [Symbol.iterator]() {
-    return this.list[Symbol.iterator]();
-  }
-}
-
-/** Text input narrowing the visible Items via a debounced `DropDown.filter` call. */
 export class Filter {
   /**
    * @param {MSelect} control
@@ -711,20 +721,20 @@ class DropDown {
     const scope = this.control.options.groupItems?.toggleScope || 'all';
 
     const apply = (items) => {
-      items.forEach((item) => {
+      for (const item of items) {
         if (item.isGroup) {
           const selfMatch = customMatcher ? matcher(item, q) : q === '' || matcher(item, q);
-          apply(item.children);
+          apply(item);
           if (selfMatch && scope === 'all' && !customMatcher) {
-            item.children.forEach((child) => {
+            for (const child of item) {
               child.visible = true;
-            });
+            }
           }
-          item.visible = selfMatch || item.children.some((child) => child.visible);
+          item.visible = selfMatch || [...item].some((child) => child.visible);
         } else {
           item.visible = customMatcher ? matcher(item, q) : q === '' || matcher(item, q);
         }
-      });
+      }
     };
 
     apply(this.control.items);
@@ -753,9 +763,10 @@ export class MSelect {
     this.options = config.options || {};
     this.logger = new Logger(this.options.logLevel || 'silent');
 
-    const rootEl = document.createElement('div');
-    rootEl.className = 'cm-items';
-    this.items = new Items(rootEl, (config.items || []).map((spec, i) => new Item(spec, this.options, i)));
+    this.items = Item.root(
+      (config.items || []).map((spec, i) => new Item(spec, this.options, i)),
+      this.options,
+    );
     this.#assertUniqueValues();
     this.selectionBox = new SelectionBox(this);
     this.dropDown = new DropDown(this);
@@ -838,7 +849,7 @@ export class MSelect {
     item.selected = false;
     this.selectionBox.remove(item);
     if (item.isGroup) {
-      for (const child of item.children) {
+      for (const child of item) {
         this.unselectItem(child);
       }
     }
