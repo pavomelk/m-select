@@ -6,6 +6,9 @@
 
 const noop = () => {};
 
+/** Tag names that are focusable in the real DOM (tabIndex 0 by default). */
+const FOCUSABLE_TAGS = new Set(['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA']);
+
 class ClassList {
   constructor() {
     this.set = new Set();
@@ -58,6 +61,22 @@ class ElementStub {
     this.scrollIntoViewCalls = 0;
   }
 
+  /** @private overrides window into the natural focusability default. */
+  #tabIndex = undefined;
+
+  /**
+   * Row-mirrors the DOM: naturally focusable tags default to 0, everything
+   * else to -1; an explicit assignment always wins.
+   */
+  get tabIndex() {
+    if (this.#tabIndex !== undefined) return this.#tabIndex;
+    return FOCUSABLE_TAGS.has(this.tagName) ? 0 : -1;
+  }
+
+  set tabIndex(value) {
+    this.#tabIndex = Number(value);
+  }
+
   get className() {
     return this.classList.toString();
   }
@@ -81,29 +100,60 @@ class ElementStub {
   set innerHTML(value) {
     this._innerHTML = String(value);
     if (this._innerHTML === '') {
+      this.children.forEach((c) => {
+        if (c && c._parent === this) c._parent = null;
+      });
       this.children = [];
     }
   }
 
   append(...nodes) {
-    this.children.push(...nodes);
+    for (const node of nodes) {
+      if (node && node._parent && node._parent !== this) {
+        node._parent.removeChild(node);
+      }
+      node._parent = this;
+      this.children.push(node);
+    }
   }
 
   appendChild(node) {
-    this.children.push(node);
+    this.append(node);
   }
 
   insertBefore(node, reference) {
     const i = this.children.indexOf(reference);
-    if (i >= 0) this.children.splice(i, 0, node);
-    else this.children.push(node);
+    if (i >= 0) {
+      if (node._parent && node._parent !== this) node._parent.removeChild(node);
+      node._parent = this;
+      this.children.splice(i, 0, node);
+    } else {
+      this.append(node);
+    }
     return node;
   }
 
   removeChild(node) {
     const i = this.children.indexOf(node);
     if (i >= 0) this.children.splice(i, 1);
+    if (node._parent === this) node._parent = null;
     return node;
+  }
+
+  /**
+   * Nearest ancestor (or self) matching a selector. Only single-class
+   * selectors like ".cm-chip" are supported; anything else (e.g. a bare class
+   * name, a tag name) matches nothing, mirroring the real DOM.
+   * @param {string} selector
+   */
+  closest(selector) {
+    const cls = String(selector).startsWith('.') ? selector.slice(1) : null;
+    let el = this;
+    while (el) {
+      if (cls && el.classList && el.classList.contains(cls)) return el;
+      el = el._parent || null;
+    }
+    return null;
   }
 
 addEventListener(type, fn) {
@@ -118,11 +168,21 @@ addEventListener(type, fn) {
     if (i >= 0) list.splice(i, 1);
   }
 
-  /** Dispatches a bare event object to listeners registered for `type`. */
+  /**
+   * Dispatches a bare event object to listeners registered for `type`, walking
+   * up the `_parent` chain like a real DOM bubble phase. Listeners whose event
+   * object defines `stopPropagation` can halt the walk.
+   */
   dispatchEvent(event) {
     this._listeners = this._listeners || {};
     const type = typeof event === 'string' ? event : event && event.type;
-    (this._listeners[type] || []).forEach((fn) => fn(event));
+    let el = this;
+    while (el) {
+      const list = (el._listeners && el._listeners[type]) || [];
+      for (const fn of list) fn(event);
+      if (event && event._propagationStopped) break;
+      el = el._parent;
+    }
   }
 
   scrollIntoView() {
@@ -131,10 +191,24 @@ addEventListener(type, fn) {
 
   focus() {
     this.focused = true;
+    document.activeElement = this;
   }
 
   blur() {
     this.focused = false;
+    if (document.activeElement === this) document.activeElement = document.body;
+  }
+
+  /** Programmatic click, like the browser's element.click(). */
+  click() {
+    this.dispatchEvent({
+      type: 'click',
+      target: this,
+      stopPropagation() {
+        this._propagationStopped = true;
+      },
+      preventDefault() {},
+    });
   }
 
   contains() {
@@ -186,6 +260,7 @@ globalThis.document = {
     (this._listeners[type] || []).forEach((fn) => fn(event));
   },
   body: new ElementStub('body'),
+  activeElement: null,
 };
 
 globalThis.ElementStub = ElementStub;

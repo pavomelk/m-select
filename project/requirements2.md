@@ -76,6 +76,8 @@
 - [ ] `REQ-3.4-02` It can have states *Current* and *Selected*. *(P0)*
 - [ ] `REQ-3.4-03` It contains a visual element for removal by mouse; removal leads to unselection of its corresponding *Item*. *(P0)*
 - [ ] `REQ-3.4-04` It has two separate mouse click areas: clicking "x" removes/unselects; clicking anywhere else marks it *Current* and enters Chip Navigation Mode (as if `<ArrowLeft>` had been pressed while hovering it), without removing/unselecting. *(P0)*
+- [ ] `REQ-3.4-05` Removing a *Current* *Chip* via its "x" hands *Current* to the *Chip* that occupies the removed chip's vacated slot — the following *Chip*, or the previous one when none follows; the rule is identical in LTR and RTL flow. *(P0)*
+- [ ] `REQ-3.4-06` Clicking the "x" neither opens the *Drop Down* nor changes the input mode. *(P0)*
 
 ### 3.5 Item/Chip entanglement
 - [ ] `REQ-3.5-01` Selecting/unselecting an *Item* and its *Chip* is always the same single action, regardless of which of the two the user interacted with. *(P0)*
@@ -108,6 +110,9 @@
 - [ ] `REQ-3.8-02` Appears and disappears depending on user actions. *(P0)*
 - [ ] `REQ-3.8-03` Allows navigation between selectable *Items* with arrow keys. *(P0)*
 - [ ] `REQ-3.8-04` Does not interfere with the appearance of other elements on the page, including other *Control* instances. *(P0)*
+- [ ] `REQ-3.8-05` Clicking an *Item* toggles its selection — the same single action as its *Chip* (REQ-3.5-01) — and marks it *Current*. *(P0)*
+- [ ] `REQ-3.8-06` The *Drop Down* offers a *Select All* button that toggles the selection of the *visible* selectable *Items* only (including value-bearing *Groups* as units): when any of them is selected it unselects them, otherwise it selects them; *Hidden* (filtered-out) *Items* are left untouched, *Chips* always mirror the resulting selection, and the action clears the *Filter* query. *(P0)*
+- [ ] `REQ-3.8-07` The *Select All* button appears only while the *Filter* query is active (non-empty text), i.e. it works together with the *Filter*; clearing the query hides it again. *(P0)*
 
 ### 3.9 Filter
 - [ ] `REQ-3.9-01` Editable element that allows text input. *(P0)*
@@ -121,11 +126,18 @@
 - [ ] `REQ-3.10-05` Clicking the *Filter* input enters *Filter mode* and opens the *Drop Down*; the input caret is enabled. *(P0)*
 - [ ] `REQ-3.10-06` Clicking a *Chip* enters *Chip mode*, marks that *Item* *Current* (reflected in the *Drop Down* and scrolled into view) and opens the *Drop Down*; the caret is hidden. *(P0)*
 - [ ] `REQ-3.10-07` Clicking the *Collapsed Chip* enters *Collapsed mode*, restricts the *Drop Down* to the selected *Items* and opens it; the caret is hidden. *(P0)*
-- [ ] `REQ-3.10-08` Clicking *Remove all* clears the selection and the *Current* *Item*, enters *Filter mode* and opens the *Drop Down*. *(P0)*
+- [ ] `REQ-3.10-08` Clicking *Remove all* clears the selection and the *Current* *Item*, removes every *Chip*, enters *Filter mode* and opens the *Drop Down*. *(P0)*
 - [ ] `REQ-3.10-09` Clicking elsewhere inside the *Selection Box* enters *DropDown mode* and opens the *Drop Down*. *(P0)*
 - [ ] `REQ-3.10-10` Clicking outside the *Control* closes the *Drop Down*, reverts to the default *Filter mode* and hides the caret. *(P0)*
 - [ ] `REQ-3.10-11` *Filter mode* is the default mode; every user action dispatches a mode change. *(P0)*
 - [ ] `REQ-3.10-12` The *Modes* object is not part of the public API; tests observe mode switches through an exported symbol. *(P0)*
+
+### 3.11 Keyboard interaction
+- [ ] `REQ-3.11-01` The *Control* has exactly one Tab stop: the *Filter* input. Arriving with `Tab` focuses the *Filter*; leaving with `Tab` moves out of the component. *(P0)*
+- [ ] `REQ-3.11-02` The following parts are not Tab-reachable (`tabindex="-1"`): *Remove all* button, *Select All* button, and every chip "x". They remain clickable and programmatically focusable. *(P0)*
+- [ ] `REQ-3.11-03` After the *Drop Down* opens, the arrow keys move a *Current* pointer between Items/Chips without moving the system focus; the *Filter* keeps the focus for the whole session. *(P0)*
+- [ ] `REQ-3.11-04` Filter mode is active when the component receives focus: focusing the *Filter* enters *Filter mode* and enables the input caret. *(P0)*
+- [ ] `REQ-3.11-05` In *Filter mode*, `ArrowDown` opens the *Drop Down* (when closed) and marks the first visible *Item* as *Current*; when the *Drop Down* is already open, the marker is left as-is. *(P0)*
 
 ---
 
@@ -175,6 +187,7 @@
 - [ ] `REQ-7-09` The component supports keyboard and mouse interaction as described in use-case scenarios. *(P0)*
 - [ ] `REQ-7-10` The *Drop Down* does not interfere with the appearance of other elements on the page, including other instances. *(P0)*
 - [ ] `REQ-7-11` Events are produced upon basic user actions: toggle, leave, opening *Drop Down*, etc. *(P0)*
+- [ ] `REQ-7-16` The whole *Control* is one single Tab stop (REQ-3.11): `Tab`/`Shift+Tab` enter and leave the component exactly once, focusing the *Filter*; all other interactive parts (*Remove all*, *Select All*, each chip "x") keep their click/mouse behavior and programming focus but are not Tab-reachable (`tabindex="-1"`). *(P0)*
 - [ ] `REQ-7-12` The component respects the order of *Items* in which they were created or passed during instantiation. *(P0)*
 - [ ] `REQ-7-13` *Chips* are placed in the order specified by options: selection order (last selected appended to the end) / definition order / alphabetical. *(P1)*
 - [ ] `REQ-7-14` The API provides methods for removing *Items* and adding them back at any place within the existing *Items* hierarchy. *(P0)*

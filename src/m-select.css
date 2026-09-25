@@ -197,9 +197,8 @@
   font-weight: 600;
 }
 
-.cm-item--partial {
+.cm-item--partial > .cm-item__row {
   background: var(--cm-selected-bg);
-  opacity: 0.75;
 }
 
 .cm-item__row {

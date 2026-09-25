@@ -115,6 +115,28 @@ export class RootContainer {
   }
 
   /**
+   * Bulk toggle over the visible subtree, mirroring `Item#toggle()`'s calling
+   * protocol on the root node: `toggle()` flips the visible selectable Items —
+   * unselects them when any is selected, selects them otherwise — and
+   * `toggle(state)` forces that state on them. Hidden (filtered-out) Items are
+   * left exactly as they are. Notifications flow through each Item's `owner` so
+   * Chips stay in sync.
+   * @param {boolean} [state]
+   * @returns {boolean} the resulting selection state
+   */
+  toggle(state) {
+    const visible = this.selectableItems.filter((item) => item.visible);
+    const prompted = state !== undefined;
+    const after = prompted ? Boolean(state) : !visible.some((item) => item.selected);
+    for (const item of visible) {
+      if (item.selected === after) continue;
+      item.selected = after;
+      item.owner.onItemToggled(item);
+    }
+    return after;
+  }
+
+  /**
    * Builds a root container of top-level Items from specs (or pre-built Items).
    * Each top-level Item receives the container as its `parent`.
    * @param {object[]} [specs]
@@ -450,6 +472,11 @@ export class Item {
       li.append(this.element);
     }
 
+    li.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.owner) this.owner.onItemViewClick(this, e);
+    });
+
     this.itemView = li;
 
     const chip = document.createElement('span');
@@ -464,7 +491,16 @@ export class Item {
     x.className = 'cm-chip__x';
     x.title = 'Remove';
     x.textContent = '\u00d7';
+    x.tabIndex = -1;
     x._item = this;
+
+    x.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.owner) this.owner.onChipViewClick(this, e);
+    });
+    chip.addEventListener('click', (e) => {
+      if (this.owner) this.owner.onChipViewClick(this, e);
+    });
 
     chip.append(chipLabel, x);
     this.chipView = chip;
@@ -511,7 +547,10 @@ export class Filter {
     this.el.type = 'text';
     this.el.placeholder = this.control.options.placeholder || '';
     this.el.readOnly = true;
+    this.el.tabIndex = 0;
     this.el.addEventListener('input', () => this.onInput());
+    this.el.addEventListener('focus', () => this.control.onFilterFocus());
+    this.el.addEventListener('keydown', (e) => this.control.onKeyDown(e));
   }
 
   /** @type {ReturnType<typeof setTimeout>|null} */
@@ -616,6 +655,7 @@ class SelectionBox {
     this.clearBtn.className = 'cm-clear';
     this.clearBtn.title = 'Clear all selection';
     this.clearBtn.textContent = '\u2715';
+    this.clearBtn.tabIndex = -1;
 
     this.filter = new Filter(this.control);
 
@@ -655,6 +695,7 @@ class SelectionBox {
    * @param {Item} item
    */
   add(item) {
+    if (this.items.includes(item)) return;
     this.items.push(item);
     this.chips.push(item.chipView);
     this.#updateCollapsedState();
@@ -697,11 +738,30 @@ class SelectionBox {
     } else if (wasCollapsed) {
       this.chipsEl.innerHTML = '';
       this.control.orderedChips().forEach((item) => this.chipsEl.append(item.chipView));
-    } else if (this.chipsEl.children.includes(item.chipView)) {
+    } else if (Array.from(this.chipsEl.children).includes(item.chipView)) {
       this.chipsEl.removeChild(item.chipView);
     }
 
     if (this.control.dropDown.currentItem === item) {
+      this.#promoteSuccessor(itemIndex);
+    }
+  }
+
+  /**
+   * After removing the Current chip, hands "Current" to the chip that occupies
+   * the vacated slot (the one that slides in from its right; the previous chip
+   * when the removed one was last). Same rule in LTR and RTL flow. Clears the
+   * marker when no chip remains.
+   * @private
+   * @param {number} removedIndex position the removed chip held among `items`
+   */
+  #promoteSuccessor(removedIndex) {
+    const remaining = this.items;
+    if (remaining.length > removedIndex) {
+      this.control.dropDown.setCurrent(remaining[removedIndex]);
+    } else if (remaining.length > 0) {
+      this.control.dropDown.setCurrent(remaining[remaining.length - 1]);
+    } else {
       this.control.dropDown.clearCurrent();
     }
   }
@@ -772,9 +832,11 @@ class DropDown {
     this.selectAllBtn = document.createElement('button');
     this.selectAllBtn.className = 'cm-dropdown__select-all';
     this.selectAllBtn.textContent = 'Select All';
+    this.selectAllBtn.tabIndex = -1;
     this.selectAllBtn.addEventListener('click', () => this.control.toggleAll());
 
     this.toolbarEl.append(this.selectAllBtn);
+    this.selectAllBtn.style.display = 'none';
 
     this.itemsEl = document.createElement('div');
     this.itemsEl.className = 'cm-items';
@@ -784,7 +846,7 @@ class DropDown {
   }
 
   /** @private backing field: whether the "Select All" button is displayed. */
-  #showSelectAllBtn = true;
+  #showSelectAllBtn = false;
 
   /**
    * Controls whether the "Select All" button is displayed. Reads return the
@@ -877,6 +939,7 @@ class DropDown {
    */
   filter(textValue, matchFn) {
     const query = String(textValue || '');
+    this.showSelectAllButton = query !== '';
     const q = query.toLowerCase();
     const customMatcher = typeof matchFn === 'function';
     const matcher = matchFn || ((item) => item.label.toLowerCase().includes(q));
@@ -928,49 +991,98 @@ const MODES = Object.freeze({
  */
 function closestByClass(el, className) {
   if (!el) return null;
-  if (typeof el.closest === 'function') return el.closest(className);
-  return el.classList && el.classList.contains(className) ? el : null;
+  const name = String(className).replace(/^\./, '');
+  if (typeof el.closest === 'function') {
+    return el.closest(`.${name}`);
+  }
+  return el.classList && el.classList.contains(name) ? el : null;
 }
 
 /**
  * Internal input-mode state machine. Holds the active input mode and the
- * per-mode input handler sets; `process()` routes an input event to the active
- * mode's handler. Not part of the public API — reachable only through the
+ * registered mode definitions. Switching the active mode through `current`
+ * runs the outgoing mode's `onLeave` and the incoming mode's `onEntry`
+ * transition hooks; `processKey()` routes an input event to the active mode's
+ * `handlers` set. Not part of the public API — reachable only through the
  * `MSELECT_INTERNALS` symbol exported for tests.
  */
 class Modes {
-  /** @private backing field for the active mode */
-  #mode = MODES.FILTER;
-  /** @private per-mode input handler sets */
-  #sets = new Map();
+  /** @private name of the mode that was active before the current one, if any */
+  #previous = null;
+  /** @private name of the active mode */
+  #current;
+  /** @private registered mode definitions, keyed by mode name */
+  #definitions = new Map();
+
+  /**
+   * @param {string} initial the initially active mode name (typically MODES.FILTER)
+   */
+  constructor(initial) {
+    this.#current = initial;
+  }
 
   /** The currently active input mode. */
   get mode() {
-    return this.#mode;
+    return this.#current;
+  }
+
+  /** Alias of {@link Modes#mode}, matching the `current` setter's read side. */
+  get current() {
+    return this.#current;
+  }
+
+  /** The mode that was active before the current one, or null. */
+  get previous() {
+    return this.#previous;
   }
 
   /**
-   * Switches the active input mode and (optionally) its handler set.
-   * @param {string} mode one of MODES.*
-   * @param {Record<string, Function>} [handlers]
+   * Registers a mode definition. Mode names are unique; re-registering a mode
+   * replaces its definition.
+   * @param {string} name one of MODES.*
+   * @param {{onEntry?: Function, onLeave?: Function, handlers?: Record<string, Function>}} cfg
    */
-  enter(mode, handlers) {
-    this.#mode = mode;
-    if (handlers) this.#sets.set(mode, handlers);
+  define(name, cfg = {}) {
+    this.#definitions.set(name, { name, ...cfg });
   }
 
   /**
-   * Routes an input event to the active mode's handler, switching the function
-   * that processes the input. Returns the handler's result, or false when the
-   * active mode does not handle the event.
+   * Switches the active input mode, running the outgoing mode's `onLeave` and
+   * the incoming mode's `onEntry` transitions. Switching to the already active
+   * mode is a no-op; switching to an unknown mode throws.
    * @param {string} name
-   * @param {...unknown} args
-   * @returns {unknown}
+   * @returns {Modes}
    */
-  process(name, ...args) {
-    const set = this.#sets.get(this.#mode) || {};
-    const fn = set[name];
-    return fn ? fn(...args) : false;
+  set current(name) {
+    const next = this.#definitions.get(name);
+    if (!next || next.name !== name) {
+      throw new Error(`Trying to switch to unexisting input mode: ${name}`);
+    }
+    if (this.#current === name) return this;
+    this.#definitions.get(this.#current)?.onLeave?.();
+    this.#previous = this.#current;
+    this.#current = name;
+    next.onEntry?.();
+    return this;
+  }
+
+  /**
+   * Switches back to the mode that was active before the current one.
+   * @returns {Modes}
+   */
+  changeToPrevious() {
+    if (this.#previous) this.current = this.#previous;
+    return this;
+  }
+
+  /**
+   * Routes an input event to the active mode's handler for the event's key.
+   * @param {Event} event
+   * @returns {unknown} the handler's result, or false when unhandled
+   */
+  processKey(event) {
+    const fn = (this.#definitions.get(this.#current)?.handlers || {})[event?.key];
+    return fn ? fn(event) : false;
   }
 }
 
@@ -1001,6 +1113,32 @@ export class MSelect {
 
     this[MSELECT_INTERNALS] = { modes: this.#modes };
 
+    this.#modes.define(MODES.FILTER, {
+      onEntry: () => {
+        const input = this.selectionBox.filter.el;
+        input.readOnly = false;
+        this.selectionBox.filter.displaySelected = false;
+      },
+      onLeave: () => {
+        const input = this.selectionBox.filter.el;
+        input.readOnly = true;
+        input.blur();
+      },
+      handlers: {
+        ArrowDown: () => this.#onFilterArrowDown(),
+      },
+    });
+    this.#modes.define(MODES.DROPDOWN, {});
+    this.#modes.define(MODES.CHIP, {});
+    this.#modes.define(MODES.COLLAPSED, {
+      onEntry: () => {
+        this.selectionBox.filter.displaySelected = true;
+      },
+      onLeave: () => {
+        this.selectionBox.filter.displaySelected = false;
+      },
+    });
+
     this.selectionBox.el.addEventListener('click', (e) => this.#onSelectionBoxClick(e));
     document.addEventListener('mousedown', (e) => this.#onDocumentMouseDown(e));
 
@@ -1009,7 +1147,7 @@ export class MSelect {
   }
 
   /** @private internal input-mode state machine, exposed only via MSELECT_INTERNALS */
-  #modes = new Modes();
+  #modes = new Modes(MODES.FILTER);
 
   /**
    * Routes a SelectionBox click to the input mode matching the clicked part.
@@ -1021,64 +1159,70 @@ export class MSelect {
 
     if (closestByClass(target, 'cm-clear')) {
       this.clearAll();
-      this.#enterMode(MODES.FILTER);
+      this.#activateFilter();
       this.dropDown.open();
-      return;
-    }
-
-    if (closestByClass(target, 'cm-chip__x')) {
-      this.onChipClick(e);
       return;
     }
 
     if (closestByClass(target, 'cm-chip--summary')) {
-      this.#enterMode(MODES.COLLAPSED);
+      this.#modes.current = MODES.COLLAPSED;
       this.dropDown.open();
       return;
     }
 
-    if (closestByClass(target, 'cm-chip')) {
-      const item = target._item;
-      if (item) {
-        this.#enterMode(MODES.CHIP);
-        this.dropDown.open();
-        this.dropDown.setCurrent(item);
-      }
+    if (closestByClass(target, 'cm-chip') || closestByClass(target, 'cm-chip__x')) {
       return;
     }
 
     if (target === this.selectionBox.filter.el) {
-      this.#enterMode(MODES.FILTER);
+      this.#activateFilter();
       this.dropDown.open();
       return;
     }
 
-    this.#enterMode(MODES.DROPDOWN);
+    this.#modes.current = MODES.DROPDOWN;
     this.dropDown.open();
   }
 
   /**
-   * Switches the active input mode and applies its display consequences: only
-   * the filter mode enables the input caret, and only the collapsed mode
-   * limits the DropDown to selected Items.
+   * Enters the default Filter mode and reasserts the typing DOM state. Unlike a
+   * transition via `Modes.current`, this also runs when Filter is already the
+   * active mode (its transition hook is then skipped by the machine), so it
+   * re-enables the caret and pulls focus onto the input.
    * @private
-   * @param {string} mode
    */
-  #enterMode(mode) {
-    this.#modes.enter(mode);
+  #activateFilter() {
+    this.#modes.current = MODES.FILTER;
     const input = this.selectionBox.filter.el;
-    if (mode === MODES.FILTER) {
-      input.readOnly = false;
-      input.focus();
-    } else {
-      input.readOnly = true;
-      input.blur();
-    }
-    if (mode === MODES.COLLAPSED) {
-      this.selectionBox.filter.displaySelected = true;
-    } else {
-      this.selectionBox.filter.displaySelected = false;
-    }
+    input.readOnly = false;
+    if (input !== document.activeElement) input.focus();
+  }
+
+  /**
+   * The Filter is the component's only Tab stop, so keyboard input reaches the
+   * component here. The active mode's handler set decides what happens.
+   * @param {Event} e
+   */
+  onKeyDown(e) {
+    this.#modes.processKey(e);
+  }
+
+  /** Focus on the Filter means entering the default Filter mode. */
+  onFilterFocus() {
+    this.#activateFilter();
+  }
+
+  /**
+   * Filter-mode ArrowDown: opens the closed DropDown and makes the first
+   * visible Item Current. When the DropDown is already open, the Current
+   * marker is left untouched (navigation is handled separately).
+   */
+  #onFilterArrowDown() {
+    const dd = this.dropDown;
+    if (dd.el.classList.contains('cm-dropdown--open')) return;
+    const first = this.allItems.find((item) => item.visible);
+    if (first) dd.setCurrent(first);
+    dd.open();
   }
 
   /**
@@ -1090,10 +1234,11 @@ export class MSelect {
   #onDocumentMouseDown(e) {
     if (this.el.contains(e.target)) return;
     this.dropDown.close();
-    this.selectionBox.filter.el.readOnly = true;
-    this.selectionBox.filter.el.blur();
+    this.#modes.current = MODES.FILTER;
+    const input = this.selectionBox.filter.el;
+    input.readOnly = true;
+    input.blur();
     this.selectionBox.filter.displaySelected = false;
-    this.#modes.enter(MODES.FILTER);
   }
 
   /** @private Throws when more than one Item declares the same non-empty value. */
@@ -1182,36 +1327,51 @@ export class MSelect {
   clearAll() {
     this.logger.info('clear all');
     this.items.selectableItems.forEach((i) => {
+      if (!i.selected) return;
       i.selected = false;
+      this.onItemToggled(i);
     });
     this.dropDown.clearCurrent();
     this.render();
   }
 
   toggleAll() {
-    const target = this.allItems.some((i) => i.selected && i.value !== undefined) ? 'unselect' : 'select';
-    this.logger.info(`toggle all -> ${target}`);
-    for (const item of this.items.selectableItems) {
-      item.selected = target === 'select';
-    }
+    this.logger.info('toggle all');
+    this.dropDown.items.toggle();
+    this.selectionBox.filter.query = '';
     this.render();
   }
 
   /* ---- selection interaction ---- */
 
   /**
-   * Delegated chip click handler: removal via the chip's "x" element.
+   * Delegated from an Item's Chip view (child-side wiring in Item#createDOM).
+   * Clicking the "x" removal area unselects the Item; clicking the Chip body
+   * marks the Item Current and enters Chip mode, without unselecting.
+   * @param {Item} item
    * @param {Event} e
    */
-  onChipClick(e) {
-    const x =
-      (e.target && e.target.classList && e.target.classList.contains('cm-chip__x') && e.target) ||
-      (e.target && typeof e.target.closest === 'function' && e.target.closest('.cm-chip__x')) ||
-      null;
-    if (x && x._item) {
-      e.stopPropagation();
-      this.unselectItem(x._item);
+  onChipViewClick(item, e) {
+    if (closestByClass(e.target, 'cm-chip__x')) {
+      this.unselectItem(item);
+      return;
     }
+    this.#modes.current = MODES.CHIP;
+    this.dropDown.open();
+    this.dropDown.setCurrent(item);
+  }
+
+  /**
+   * Delegated from an Item's view inside the DropDown (child-side wiring in
+   * Item#createDOM). Toggling keeps the Item and its Chip entangled (REQ-3.5-01);
+   * the Item is then marked Current.
+   * @param {Item} item
+   * @param {Event} e
+   */
+  onItemViewClick(item) {
+    item.toggle();
+    this.dropDown.setCurrent(item);
+    this.#modes.current = MODES.DROPDOWN;
   }
 
   render() {

@@ -1249,12 +1249,12 @@ describe('1. MSelect', () => {
       });
     };
 
-    it('1.12.1 the select all button is shown by default', () => {
+    it('1.12.1 the select all button is hidden until the filter is engaged', () => {
       const control = setup();
 
       expect(control.dropDown.selectAllBtn).toBeTruthy();
-      expect(control.dropDown.showSelectAllButton).toBe(true);
-      expect(control.dropDown.selectAllBtn.style.display).not.toBe('none');
+      expect(control.dropDown.showSelectAllButton).toBe(false);
+      expect(control.dropDown.selectAllBtn.style.display).toBe('none');
     });
 
     it('1.12.2 assigning false to showSelectAllButton hides the select all button', () => {
@@ -1274,6 +1274,166 @@ describe('1. MSelect', () => {
 
       expect(control.dropDown.showSelectAllButton).toBe(true);
       expect(control.dropDown.selectAllBtn.style.display).not.toBe('none');
+    });
+
+    const triple = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const states = (control) => [...control.items].map((i) => i.selected);
+
+    it('1.12.4 toggling select-all with nothing selected selects every selectable Item and shows a chip for each', () => {
+      const control = triple();
+
+      control.toggleAll();
+
+      expect(states(control)).toEqual([true, true, true]);
+      expect(control.selectionBox.items.map((i) => i.value).sort()).toEqual(['a', 'b', 'c']);
+    });
+
+    it('1.12.5 toggling select-all again with everything selected unselects all and removes every chip', () => {
+      const control = triple();
+      control.toggleAll();
+
+      control.toggleAll();
+
+      expect(states(control)).toEqual([false, false, false]);
+      expect(control.selectionBox.items).toHaveLength(0);
+    });
+
+    it('1.12.6 a manually picked Item is not exempt: select-all unselects it and later reselects it with the rest', () => {
+      const control = triple();
+      control.items[0].toggle();
+      expect(control.selectionBox.items.map((i) => i.value)).toEqual(['a']);
+
+      control.toggleAll();
+
+      expect(states(control)).toEqual([false, false, false]);
+      expect(control.selectionBox.items).toHaveLength(0);
+
+      control.toggleAll();
+
+      expect(states(control)).toEqual([true, true, true]);
+      expect(control.selectionBox.items.map((i) => i.value).sort()).toEqual(['a', 'b', 'c']);
+    });
+
+    it('1.12.7 toggling all on a value-bearing Group treats the Group as a selected unit, like clicking it', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          {
+            value: 'g',
+            label: 'Group',
+            items: [
+              { value: 'a', label: 'Alpha' },
+              { value: 'b', label: 'Bravo' },
+            ],
+          },
+        ],
+      });
+
+      control.toggleAll();
+
+      const group = control.items[0];
+      expect(group.selectionState).toBe('all');
+      expect(group.selected).toBe(true);
+      expect(control.selectionBox.items.map((i) => i.value).sort()).toEqual(['a', 'b', 'g']);
+
+      control.toggleAll();
+
+      expect(group.selectionState).toBe('none');
+      expect(group.selected).toBe(false);
+      expect(control.selectionBox.items).toHaveLength(0);
+    });
+
+    it('1.12.8 RootContainer.toggle mirrors Item.toggle: an explicit state forces that outcome', () => {
+      const control = triple();
+      control.items[0].toggle();
+
+      control.items.toggle(true);
+
+      expect(states(control)).toEqual([true, true, true]);
+      expect(control.selectionBox.items).toHaveLength(3);
+
+      control.items.toggle(false);
+
+      expect(states(control)).toEqual([false, false, false]);
+      expect(control.selectionBox.items).toHaveLength(0);
+    });
+
+    it('1.12.9 engaging the filter shows the select all button and clearing it hides it again', () => {
+      const control = triple();
+      expect(control.dropDown.showSelectAllButton).toBe(false);
+
+      control.selectionBox.filter.query = 'alp';
+
+      expect(control.dropDown.showSelectAllButton).toBe(true);
+      expect(control.dropDown.selectAllBtn.style.display).not.toBe('none');
+
+      control.selectionBox.filter.query = '';
+
+      expect(control.dropDown.showSelectAllButton).toBe(false);
+      expect(control.dropDown.selectAllBtn.style.display).toBe('none');
+    });
+
+    it('1.12.10 with a filter active, selecting all touches only the visible Items', () => {
+      const control = triple();
+      control.selectionBox.filter.query = 'al';
+
+      control.toggleAll();
+
+      expect(states(control)).toEqual([true, false, false]);
+      expect(control.selectionBox.items.map((i) => i.value)).toEqual(['a']);
+    });
+
+    it('1.12.11 with a filter active, toggling all leaves hidden Items exactly as they are', () => {
+      const control = triple();
+      control.items[2].toggle();
+      control.selectionBox.filter.query = 'al';
+      expect(states(control)).toEqual([false, false, true]);
+
+      control.toggleAll();
+
+      expect(states(control)).toEqual([true, false, true]);
+      expect(control.selectionBox.items.map((i) => i.value).sort()).toEqual(['a', 'c']);
+
+      control.selectionBox.filter.query = 'al';
+      control.toggleAll();
+
+      expect(states(control)).toEqual([false, false, true]);
+      expect(control.selectionBox.items.map((i) => i.value)).toEqual(['c']);
+    });
+
+    it('1.12.12 RootContainer.toggle forces the state on the visible Items only', () => {
+      const control = triple();
+      control.selectionBox.filter.query = 'al';
+
+      control.items.toggle(true);
+
+      expect(states(control)).toEqual([true, false, false]);
+      expect(control.selectionBox.items.map((i) => i.value)).toEqual(['a']);
+    });
+
+    it('1.12.13 clicking select all clears the filter query and the visibility it imposed', () => {
+      const control = triple();
+      control.selectionBox.filter.query = 'al';
+      expect(control.dropDown.showSelectAllButton).toBe(true);
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[1].visible).toBe(false);
+      expect(control.items[2].visible).toBe(false);
+
+      control.dropDown.selectAllBtn.click();
+
+      expect(control.selectionBox.filter.query).toBe('');
+      expect(control.dropDown.showSelectAllButton).toBe(false);
+      expect([...control.items].map((i) => i.visible)).toEqual([true, true, true]);
+      expect(states(control)).toEqual([true, false, false]);
     });
   });
 
@@ -1793,10 +1953,7 @@ describe('1. MSelect', () => {
       control.items[1].toggle(true);
       const item = control.items[0];
 
-      control.selectionBox.el.dispatchEvent({
-        type: 'click',
-        target: item.chipView,
-      });
+      item.chipView.click();
 
       expect(modes(control).mode).toBe('chip');
       expect(isOpen(control)).toBe(true);
@@ -1844,14 +2001,26 @@ describe('1. MSelect', () => {
       expect(control.selectionBox.filter.el.readOnly).toBe(false);
     });
 
+    it('1.15.10 clicking RemoveAll also removes every chip from the selection box', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      expect(control.selectionBox.items).toHaveLength(2);
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.selectionBox.clearBtn,
+      });
+
+      expect(control.selectionBox.items).toHaveLength(0);
+      expect(control.selectionBox.chips).toHaveLength(0);
+    });
+
     it('1.15.6 clicking outside the control closes the DropDown and returns to the default filter mode', () => {
       const control = setup();
       control.items[0].toggle(true);
 
-      control.selectionBox.el.dispatchEvent({
-        type: 'click',
-        target: control.items[0].chipView,
-      });
+      control.items[0].chipView.click();
       expect(modes(control).mode).toBe('chip');
       expect(isOpen(control)).toBe(true);
 
@@ -1883,10 +2052,7 @@ describe('1. MSelect', () => {
       control.items[0].toggle(true);
       control.items[1].toggle(true);
 
-      control.selectionBox.el.dispatchEvent({
-        type: 'click',
-        target: control.items[0].chipView,
-      });
+      control.items[0].chipView.click();
       expect(modes(control).mode).toBe('chip');
 
       control.selectionBox.el.dispatchEvent({
@@ -1895,10 +2061,7 @@ describe('1. MSelect', () => {
       });
       expect(modes(control).mode).toBe('filter');
 
-      control.selectionBox.el.dispatchEvent({
-        type: 'click',
-        target: control.items[1].chipView,
-      });
+      control.items[1].chipView.click();
       expect(modes(control).mode).toBe('chip');
       expect(control.dropDown.currentItem).toBe(control.items[1]);
     });
@@ -1921,6 +2084,440 @@ describe('1. MSelect', () => {
       expect(modes(control).mode).toBe('filter');
       expect(control.selectionBox.filter.displaySelected).toBe(false);
       expect(control.items[3].visible).toBe(true);
+    });
+  });
+
+  // requires: per-view click wiring in Item#createDOM (itemView/chipView/"x"),
+  // MSelect.onItemViewClick (toggle + Current) and onChipViewClick (x removal,
+  // body -> Current + Chip mode), ElementStub.click()
+  describe('16. View click handlers', () => {
+    const setup = (items) => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items:
+          items ||
+          [
+            { value: 'a', label: 'Alpha' },
+            { value: 'b', label: 'Bravo' },
+            { value: 'c', label: 'Charlie' },
+          ],
+      });
+      return control;
+    };
+
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const isOpen = (control) =>
+      control.dropDown.el.classList.contains('cm-dropdown--open');
+
+    it('1.16.1 clicking the Item view toggles its selection, adds its Chip and marks it Current', () => {
+      const control = setup();
+      const item = control.items[0];
+      expect(item.selected).toBe(false);
+
+      item.itemView.click();
+
+      expect(item.selected).toBe(true);
+      expect(control.selectedItems).toContain(item);
+      expect(control.selectionBox.chipsEl.children).toContain(item.chipView);
+      expect(control.dropDown.currentItem).toBe(item);
+      expect(modes(control).mode).toBe('dropdown');
+    });
+
+    it('1.16.2 clicking the Item view again unselects and removes its Chip', () => {
+      const control = setup();
+      const item = control.items[0];
+      item.itemView.click();
+      expect(item.selected).toBe(true);
+
+      item.itemView.click();
+
+      expect(item.selected).toBe(false);
+      expect(control.selectionBox.chipsEl.children).not.toContain(item.chipView);
+    });
+
+    it('1.16.3 clicking a Chip body marks it Current and enters Chip mode without unselecting', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      const item = control.items[0];
+
+      item.chipView.click();
+
+      expect(item.selected).toBe(true);
+      expect(control.dropDown.currentItem).toBe(item);
+      expect(item.current).toBe(true);
+      expect(item.itemView.classList.contains('cm-item--current')).toBe(true);
+      expect(item.itemView.scrollIntoViewCalls).toBe(1);
+      expect(modes(control).mode).toBe('chip');
+      expect(isOpen(control)).toBe(true);
+      expect(control.selectionBox.filter.el.readOnly).toBe(true);
+    });
+
+    it('1.16.4 clicking the Chip "x" area unselects without marking it Current or switching modes', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      const item = control.items[0];
+      expect(item.selected).toBe(true);
+
+      const x = item.chipView.children.find((el) =>
+        el.classList.contains('cm-chip__x')
+      );
+      expect(x).toBeTruthy();
+
+      x.click();
+
+      expect(item.selected).toBe(false);
+      expect(control.selectedItems).not.toContain(item);
+      expect(control.dropDown.currentItem).not.toBe(item);
+      expect(modes(control).mode).toBe('filter');
+    });
+
+    it('1.16.5 clicking a Group Item view toggles its children and marks the group Current', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          {
+            value: 'g',
+            label: 'Group',
+            items: [
+              { value: 'a', label: 'Alpha' },
+              { value: 'b', label: 'Bravo' },
+            ],
+          },
+        ],
+      });
+      const group = control.items[0];
+      expect(group.isGroup).toBe(true);
+
+      group.itemView.click();
+
+      expect(group[0].selected).toBe(true);
+      expect(group[1].selected).toBe(true);
+      expect(control.dropDown.currentItem).toBe(group);
+      expect(modes(control).mode).toBe('dropdown');
+    });
+
+    it('1.16.6 clicking a child Item view does not bubble into (and toggle) the enclosing Group', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          {
+            value: 'g',
+            label: 'Group',
+            items: [
+              { value: 'a', label: 'Alpha' },
+              { value: 'b', label: 'Bravo' },
+              { value: 'c', label: 'Charlie' },
+            ],
+          },
+        ],
+      });
+      const group = control.items[0];
+      group.toggle(true);
+      expect([...group].map((i) => i.selected)).toEqual([true, true, true]);
+      expect(group.selected).toBe(true);
+
+      group[1].itemView.click();
+
+      expect(group[1].selected).toBe(false);
+      expect(group[0].selected).toBe(true);
+      expect(group[2].selected).toBe(true);
+      expect(control.dropDown.currentItem).toBe(group[1]);
+    });
+  });
+
+  // requires: SelectionBox removal handing "Current" to the Chip that takes
+  // the vacated slot; guard so chip/"x" clicks do not reach the SelectionBox
+  // delegation's fallback (no DropDown open / no mode change)
+  describe('17. Chip removal successor', () => {
+    const setup = (items) => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items:
+          items ||
+          [
+            { value: 'a', label: 'Alpha' },
+            { value: 'b', label: 'Bravo' },
+            { value: 'c', label: 'Charlie' },
+          ],
+      });
+      return control;
+    };
+
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const isOpen = (control) =>
+      control.dropDown.el.classList.contains('cm-dropdown--open');
+
+    const xOf = (item) =>
+      item.chipView.children.find((el) => el.classList.contains('cm-chip__x'));
+
+    it('1.17.1 removing the Current chip hands "Current" to the chip that takes its slot', () => {
+      const control = setup();
+      for (const item of control.items) item.toggle(true);
+      control.dropDown.setCurrent(control.items[1]);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+
+      xOf(control.items[1]).click();
+
+      expect(control.items[1].selected).toBe(false);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+    });
+
+    it('1.17.2 removing the last Current chip hands "Current" to the previous chip', () => {
+      const control = setup();
+      for (const item of control.items) item.toggle(true);
+      control.dropDown.setCurrent(control.items[2]);
+
+      xOf(control.items[2]).click();
+
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.17.3 removing the only remaining Current chip leaves no chip Current', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.dropDown.setCurrent(control.items[0]);
+
+      xOf(control.items[0]).click();
+
+      expect(control.dropDown.currentItem).toBeNull();
+    });
+
+    it('1.17.4 removing a chip that is not Current leaves "Current" untouched', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      control.dropDown.setCurrent(control.items[1]);
+
+      xOf(control.items[0]).click();
+
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.17.5 an "x" click bubbling into the Selection Box neither opens the DropDown nor switches mode', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: xOf(control.items[0]),
+      });
+
+      expect(isOpen(control)).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+    });
+  });
+
+  describe('18. Single Tab stop (keyboard entry)', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+        ],
+      });
+    };
+
+    const tabStops = (root) => {
+      const stops = [];
+      const walk = (el) => {
+        if (el.tabIndex >= 0) stops.push(el);
+        (el.children || []).forEach(walk);
+      };
+      walk(root);
+      return stops;
+    };
+
+    it('1.18.1 the whole component offers exactly one Tab stop — the Filter input', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [{ value: 'a', label: 'Alpha' }],
+      });
+
+      const stops = tabStops(control.el);
+
+      expect(stops).toEqual([control.selectionBox.filter.el]);
+      expect(control.selectionBox.filter.el.tabIndex).toBe(0);
+    });
+
+    it('1.18.2 the RemoveAll button is not a Tab stop', () => {
+      const control = setup();
+      expect(control.selectionBox.clearBtn.tabIndex).toBeLessThan(0);
+    });
+
+    it('1.18.3 the select-all button is not a Tab stop', () => {
+      const control = setup();
+      expect(control.dropDown.selectAllBtn.tabIndex).toBeLessThan(0);
+    });
+
+    it('1.18.4 the chip removal "x" buttons are not Tab stops', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+
+      for (const item of control.items) {
+        const x = item.chipView.children.find((c) => c.className.includes('cm-chip__x'));
+        expect(x).toBeTruthy();
+        expect(x.tabIndex).toBeLessThan(0);
+      }
+      expect(tabStops(control.el)).toEqual([control.selectionBox.filter.el]);
+    });
+
+    it('1.18.5 item views (leaf and Group) are not Tab stops', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'g', label: 'Group', items: [{ value: 'b', label: 'Bravo' }] },
+        ],
+      });
+
+      for (const item of control.allItems) {
+        expect(item.itemView.tabIndex).toBeLessThan(0);
+      }
+      expect(tabStops(control.el)).toEqual([control.selectionBox.filter.el]);
+    });
+  });
+
+  describe('19. Keyboard - focus enters Filter mode, ArrowDown opens the DropDown', () => {
+    const setup = (items) => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items:
+          items ||
+          [
+            { value: 'a', label: 'Alpha' },
+            { value: 'b', label: 'Bravo' },
+            { value: 'c', label: 'Charlie' },
+          ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const isOpen = (control) =>
+      control.dropDown.el.classList.contains('cm-dropdown--open');
+    const keydown = (element, key) =>
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        preventDefault() {},
+      });
+
+    it('1.19.1 focusing the Filter enters Filter mode with the caret enabled', () => {
+      const control = setup();
+      control.dropDown.open();
+      control.selectionBox.filter.el.dispatchEvent({ type: 'focus' });
+
+      expect(modes(control).mode).toBe('filter');
+      expect(control.selectionBox.filter.el.readOnly).toBe(false);
+    });
+
+    it('1.19.2 ArrowDown in Filter mode opens a closed DropDown and makes the first visible item Current', () => {
+      const control = setup();
+      expect(isOpen(control)).toBe(false);
+      expect(control.dropDown.currentItem).toBeNull();
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(isOpen(control)).toBe(true);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
+    it('1.19.3 ArrowDown with the DropDown already open keeps the first visible item Current', () => {
+      const control = setup();
+      control.dropDown.open();
+      control.items[1].toggle(true);
+      control.dropDown.setCurrent(control.items[1]);
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(isOpen(control)).toBe(true);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.19.4 ArrowDown respects the filter: with only matching Items visible, the first visible one is Current', () => {
+      const control = setup();
+      control.selectionBox.filter.query = 'a'; // visible: Alpha, Charlie
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(isOpen(control)).toBe(true);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+  });
+
+  describe('20. Modes lifecycle', () => {
+    const setup = (items) => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items:
+          items ||
+          [
+            { value: 'a', label: 'Alpha' },
+            { value: 'b', label: 'Bravo' },
+            { value: 'c', label: 'Charlie' },
+          ],
+      });
+      return control;
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+
+    it('1.20.1 switching via Modes.current runs the transitions: its onLeave/onEntry hooks own the caret and the display state', () => {
+      const control = setup();
+      const input = control.selectionBox.filter.el;
+
+      modes(control).current = 'collapsed';
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      expect(input.readOnly).toBe(true);
+
+      modes(control).current = 'filter';
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      expect(input.readOnly).toBe(false);
+    });
+
+    it('1.20.2 switching to the already active mode is a no-op', () => {
+      const control = setup();
+      const input = control.selectionBox.filter.el;
+      expect(input.readOnly).toBe(true);
+
+      modes(control).current = 'filter';
+
+      expect(modes(control).mode).toBe('filter');
+      expect(input.readOnly).toBe(true);
+    });
+
+    it('1.20.3 switching to an unknown mode throws', () => {
+      const control = setup();
+      expect(() => {
+        modes(control).current = 'bogus';
+      }).toThrow();
+    });
+
+    it('1.20.4 changeToPrevious returns to the mode that was active before the transition', () => {
+      const control = setup();
+      const input = control.selectionBox.filter.el;
+
+      modes(control).current = 'collapsed';
+      expect(modes(control).previous).toBe('filter');
+
+      modes(control).changeToPrevious();
+
+      expect(modes(control).mode).toBe('filter');
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      expect(input.readOnly).toBe(false);
+    });
+
+    it('1.20.5 previous tracks multi-step transitions so changeToPrevious undoes the last step', () => {
+      const control = setup();
+
+      modes(control).current = 'dropdown';
+      modes(control).current = 'collapsed';
+      expect(modes(control).mode).toBe('collapsed');
+      expect(modes(control).previous).toBe('dropdown');
+
+      modes(control).changeToPrevious();
+      expect(modes(control).mode).toBe('dropdown');
     });
   });
 });
