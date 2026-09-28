@@ -191,9 +191,12 @@
 - [ ] `REQ-7-12` The component respects the order of *Items* in which they were created or passed during instantiation. *(P0)*
 - [ ] `REQ-7-13` *Chips* are placed in the order specified by options: selection order (last selected appended to the end) / definition order / alphabetical. *(P1)*
 - [ ] `REQ-7-14` The API provides methods for removing *Items* and adding them back at any place within the existing *Items* hierarchy. *(P0)*
-- [ ] `REQ-7-15` **Lazy loading of Items.** The component must not instantiate the *Item* tree eagerly at construction. *Items* are instantiated upon the component receiving focus for the first time; this happens at most once per component instance (subsequent focus does not re-instantiate). *(TBD — new requirement)*
-  - Cross-refs: REQ-6-04 (programmatic selection before first focus), REQ-7-06 (Items created at runtime), REQ-3.7-02 (Selection Box always visible yet Items not yet created).
-  - Detail needed: see section 11.
+- [ ] `REQ-7-15` **Lazy loading of Items.** With `delayedLoad: true` the component constructs empty and stays empty until the application calls `setItems(specs)`; with the default `delayedLoad: false` the constructor instantiates `config.items` immediately. Instantiation happens at most once per component instance. *(P1)*
+  - Cross-refs: REQ-6-04 (programmatic selection before first focus — preset `selected: true` specs re-seed the Selection Box via `setItems`), REQ-7-06 (Items created at runtime), REQ-3.7-02 (Selection Box always visible yet Items not yet created).
+  - Design agreed in §11 item 1; implemented by group 21 tests.
+- [ ] `REQ-7-17` `setItems(specs)` — public one-time instantiation of the whole *Item* tree. When `delayedLoad` is enabled, the component calls it never; the application calls it (typically in response to `cm-items-request`). A second call throws; later tree adjustments happen by adding/removing *Items* (REQ-7-14). It fully replaces any previous tree: rebuilds the *Drop Down*, resets the *Current* marker, and re-seeds the selection from the new specs' `selected: true` flags. *(P1)*
+- [ ] `REQ-7-18` Custom events (prefix `cm-`), `CustomEvent` with `detail`, bubbled on the component root: `cm-items-request` (one-shot when the component is empty — first Filter focus, first *Drop Down* open, first toggle-all/clear-all), `cm-items-set` `{count}` (delayed flow only), `cm-dropdown-open`, `cm-dropdown-close`, `cm-mode-change` `{from, to}`. *(P1)*
+- [ ] `REQ-7-19` Preset-selection safeguard: instantiating more than 50 already-selected *Items* with `maxVisibleChips` left null enforces `maxVisibleChips = 25`, so the selection collapses to the summary chip instead of flooding the DOM with hundreds of individual chips. The cap applies only at instantiation; a selection of ≤50 stays expanded. *(P1)*
 
 ---
 
@@ -228,10 +231,8 @@
 - Herarchical numbering scheme for tests (TBD).
 - Detailed logger design (8).
 - Additional requirements promised by author ("More detailed requirements will come").
-- **REQ-7-15 (lazy loading) — detail before implementing:**
-  - What exactly counts as "component receiving focus": DOM `focus`/`focusin` on the control root, on the *Filter* input, or any interactive part? Does *Drop Down* opening (click on *Selection Box*) count if it happens without a prior focus event?
-  - What is instantiated: only the tree of *Item* objects (model), or also the *Drop Down* DOM? Is instantiation once, or once per branch (children built when a *Group Item* is first expanded)?
-  - How does the always-visible *Selection Box* display chips for pre-set values (REQ-6-04) before first focus, given chips are derived from *Items*? Options: (a) preset selection triggers instantiation, (b) chips built from raw config values until first focus, (c) no chips until first focus (likely wrong).
-  - Where are programmatic calls made before first focus buffered (add/remove/select) and when are they flushed — at instantiation, or does calling them force instantiation?
-  - Interaction with REQ-7-06: are runtime-added *Items* applied to the lazy structure (create-on-demand or post-instantiation), and does adding an item before first focus force instantiation?
-  - Performance intent: is this for many items (avoid upfront cost on page load), or for deferred network/data source? Affects whether the source may be a lazy `resolveItems()` callback rather than a static array.
+- **REQ-7-15 (lazy loading) — resolved:**
+  - Trigger count: a `delayedLoad` flag (default `false`); with it enabled the component instantiates on the application's `setItems(specs)` call, typically reacting to the one-shot `cm-items-request` event. Instantiation is at most once; a second `setItems` throws.
+  - Preset selection (REQ-6-04): preset `selected: true` specs re-seed the Selection Box within `setItems`, so chips appear without any prior focus. When preset selection exceeds 50 (REQ-7-19) the box collapses to the summary chip.
+  - Runtime adjustments (REQ-7-06/7-14): additions/removals act on the already-instantiated tree; a future extended `setItems` capable of re-instantiation remains possible.
+  - Performance intent: avoid upfront instantiation cost and enable deferred data sources (network/backend → `setItems`).

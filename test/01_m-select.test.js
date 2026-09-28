@@ -198,11 +198,16 @@ describe('1. MSelect', () => {
       expect(item.itemView.classList.contains('cm-item--selected')).toBe(true);
     });
 
-    it('1.2.6 Item instantiation includes ChipView DOM elements', () => {
+    it('1.2.6 Item instantiation does not build a ChipView until it is displayed as an individual Chip (lazy chips)', () => {
       const item = new Item({ value: 'a', label: 'A' }, {}, 0, root);
-      expect(item.chipView).toBeTruthy();
+      expect(item.chipView).toBeNull();
+
+      const chip = item.buildChipView();
+
+      expect(chip).toBe(item.chipView);
       expect(item.chipView.nodeType).toBe(1);
       expect(item.chipView.classList.contains('cm-chip')).toBe(true);
+      expect(item.buildChipView()).toBe(item.chipView);
     });
   });
 
@@ -1765,14 +1770,17 @@ describe('1. MSelect', () => {
       expect(collapsed.chipView.classList.contains('cm-chip--current')).toBe(false);
     });
 
-    it('1.14.8 while collapsed, the SelectionBox keeps tracking the individual chips (state persistence)', () => {
+    it('1.14.8 while collapsed, the SelectionBox keeps tracking the selection and built chips (state persistence)', () => {
       const control = setup();
       for (const item of control.items) item.toggle(true);
 
+      // The selection itself is fully tracked even while collapsed...
       expect(control.selectionBox.items).toHaveLength(3);
-      expect(control.selectionBox.chips).toHaveLength(3);
       expect(control.selectionBox.chip('b')).toBe(control.items[1]);
       expect(control.selectionBox.chipsEl.children).toHaveLength(1);
+
+      // ...while individual chips are only kept for the ones actually rendered.
+      expect(control.selectionBox.chips).toHaveLength(2);
     });
 
     it('1.14.9 add() collapses immediately once the count exceeds maxVisibleChips (no render needed)', () => {
@@ -2518,6 +2526,247 @@ describe('1. MSelect', () => {
 
       modes(control).changeToPrevious();
       expect(modes(control).mode).toBe('dropdown');
+    });
+  });
+
+  // requires: setItems + delayedLoad, cm-* CustomEvents, one-shot items
+  // request, preset-selection seeding, lazy chipViews, preset safeguard
+  describe('21. Instantiation, delayedLoad and events', () => {
+    const DEFAULT_ITEMS = [
+      { value: 'a', label: 'Alpha' },
+      { value: 'b', label: 'Bravo' },
+      { value: 'c', label: 'Charlie' },
+    ];
+    const setup = (options, items) => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: items || DEFAULT_ITEMS,
+        options,
+      });
+      return control;
+    };
+    const collect = (control, ...types) => {
+      const seen = [];
+      types.forEach((type) =>
+        control.el.addEventListener(type, (e) =>
+          seen.push({ type: e.type, detail: e.detail })
+        )
+      );
+      return seen;
+    };
+    const isOpen = (control) =>
+      control.dropDown.el.classList.contains('cm-dropdown--open');
+
+    it('1.21.1 by default (no delayedLoad) Items are present at construction and a preset selected:true spec already shows its Chip', () => {
+      const control = new MSelect(document.createElement('div'), {
+        items: [
+          { value: 'a', label: 'Alpha', selected: true },
+          { value: 'b', label: 'Bravo' },
+        ],
+      });
+
+      expect(control.dropDown.itemsEl.children.length).toBe(2);
+      expect(control.selectedItems).toHaveLength(1);
+      expect(Array.from(control.selectionBox.chipsEl.children)).toContain(
+        control.items[0].chipView
+      );
+    });
+
+    it('1.21.2 delayedLoad:true constructs the component empty; setItems later instantiates the tree and the selection', () => {
+      const control = setup({ delayedLoad: true });
+
+      expect(control.dropDown.itemsEl.children.length).toBe(0);
+      expect(control.selectedItems).toHaveLength(0);
+
+      control.setItems([
+        { value: 'a', label: 'Alpha', selected: true },
+        { value: 'b', label: 'Bravo' },
+      ]);
+
+      expect(control.dropDown.itemsEl.children.length).toBe(2);
+      expect(control.selectedItems).toHaveLength(1);
+      expect(Array.from(control.selectionBox.chipsEl.children)).toContain(
+        control.items[0].chipView
+      );
+    });
+
+    it('1.21.3 with delayedLoad:true the cm-items-request event fires once when the Filter receives focus', () => {
+      const control = setup({ delayedLoad: true });
+      const seen = collect(control, 'cm-items-request');
+
+      control.selectionBox.filter.el.dispatchEvent({ type: 'focus' });
+      control.selectionBox.filter.el.dispatchEvent({ type: 'focus' });
+
+      expect(seen).toHaveLength(1);
+    });
+
+    it('1.21.4 with delayedLoad:true the cm-items-request event also fires on first DropDown open, but not again on re-open', () => {
+      const control = setup({ delayedLoad: true });
+      const seen = collect(control, 'cm-items-request');
+
+      control.dropDown.open();
+      control.dropDown.open();
+
+      expect(seen).toHaveLength(1);
+    });
+
+    it('1.21.5 with delayedLoad:true a toggleAll/clearAll attempt against the empty tree raises the request, once across all triggers', () => {
+      const viaToggle = (() => {
+        const control = setup({ delayedLoad: true });
+        const seen = collect(control, 'cm-items-request');
+        control.toggleAll();
+        expect(seen).toHaveLength(1);
+        control.clearAll();
+        expect(seen).toHaveLength(1);
+        return seen;
+      })();
+      expect(viaToggle).toHaveLength(1);
+
+      const viaClear = (() => {
+        const control = setup({ delayedLoad: true });
+        const seen = collect(control, 'cm-items-request');
+        control.clearAll();
+        expect(seen).toHaveLength(1);
+        return seen;
+      })();
+      expect(viaClear).toHaveLength(1);
+    });
+
+    it('1.21.6 without delayedLoad no cm-items-request is ever emitted', () => {
+      const control = setup();
+      const seen = collect(control, 'cm-items-request');
+
+      control.selectionBox.filter.el.dispatchEvent({ type: 'focus' });
+      control.dropDown.open();
+
+      expect(seen).toHaveLength(0);
+    });
+
+    it('1.21.7 setItems into the empty component emits cm-items-set with the instantiated item count', () => {
+      const control = setup({ delayedLoad: true });
+      const seen = collect(control, 'cm-items-set');
+
+      control.setItems([
+        { value: 'a', label: 'Alpha' },
+        { value: 'b', label: 'Bravo' },
+      ]);
+
+      expect(seen).toEqual([{ type: 'cm-items-set', detail: { count: 2 } }]);
+    });
+
+    it('1.21.8 after setItems there is no further items request', () => {
+      const control = setup({ delayedLoad: true });
+      control.setItems(DEFAULT_ITEMS);
+      const seen = collect(control, 'cm-items-request');
+
+      control.selectionBox.filter.el.dispatchEvent({ type: 'focus' });
+      control.dropDown.open();
+
+      expect(seen).toHaveLength(0);
+    });
+
+    it('1.21.9 a second setItems call throws: the tree can only be instantiated once', () => {
+      const control = setup({ delayedLoad: true });
+      control.setItems(DEFAULT_ITEMS);
+      const first = control.items[0];
+
+      expect(() => control.setItems([{ value: 'x', label: 'Other' }])).toThrow(
+        /only be populated once/
+      );
+
+      expect(control.items[0]).toBe(first);
+      expect(control.dropDown.itemsEl.children.length).toBe(3);
+    });
+
+    it('1.21.10 setItems seeds the selection from the new specs and starts with a cleared Current and a collapse state matching the seeded count', () => {
+      const control = setup({ delayedLoad: true, maxVisibleChips: 2 });
+      control.setItems([
+        { value: 'a', label: 'Alpha', selected: true },
+        { value: 'b', label: 'Bravo', selected: true },
+        { value: 'c', label: 'Charlie', selected: true },
+      ]);
+
+      expect(control.dropDown.currentItem).toBeNull();
+      expect(control.selectionBox.items).toHaveLength(3);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+    });
+
+    it('1.21.11 cm-dropdown-open and cm-dropdown-close fire when the DropDown opens and closes', () => {
+      const control = setup();
+      const seen = collect(control, 'cm-dropdown-open', 'cm-dropdown-close');
+
+      control.dropDown.open();
+      expect(isOpen(control)).toBe(true);
+      control.dropDown.close();
+      expect(isOpen(control)).toBe(false);
+
+      expect(seen.map((e) => e.type)).toEqual(['cm-dropdown-open', 'cm-dropdown-close']);
+    });
+
+    it('1.21.12 cm-mode-change fires with {from, to} on a real mode transition', () => {
+      const control = setup({ maxVisibleChips: 2 });
+      for (const item of [...control.items].slice(0, 3)) item.toggle(true);
+      const seen = collect(control, 'cm-mode-change');
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.selectionBox.collapsedChip.chipView,
+      });
+
+      expect(seen).toEqual([{ type: 'cm-mode-change', detail: { from: 'filter', to: 'collapsed' } }]);
+    });
+
+    it('1.21.13 an Item builds its ChipView only when rendered as an individual chip; collapsed-away and unselected Items stay unbuilt', () => {
+      const control = setup({ maxVisibleChips: 1 });
+      expect(control.items[0].chipView).toBeNull();
+      expect(control.items[1].chipView).toBeNull();
+
+      control.items[0].toggle(true);
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      expect(control.items[0].chipView).toBeTruthy();
+      expect(control.items[1].chipView).toBeNull();
+
+      control.items[1].toggle(true);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      expect(control.items[1].chipView).toBeNull();
+
+      control.items[2].toggle(true);
+      expect(control.items[2].chipView).toBeNull();
+    });
+
+    it('1.21.14 preset selection above 50 with maxVisibleChips left null enforces maxVisibleChips=25 and collapses to the summary chip, keeping every selected Item', () => {
+      const many = Array.from({ length: 60 }, (_, i) => ({
+        value: `v${i}`,
+        label: `Item ${i}`,
+        selected: true,
+      }));
+      const control = setup({ delayedLoad: true });
+      control.setItems(many);
+
+      expect(control.selectedItems).toHaveLength(60);
+      expect(control.options.maxVisibleChips).toBe(25);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      expect(
+        control.selectionBox.chipsEl.children.includes(
+          control.selectionBox.collapsedChip.chipView
+        )
+      ).toBe(true);
+      expect(control.items[0].chipView).toBeNull();
+    });
+
+    it('1.21.15 a preset selection of 50 or fewer leaves maxVisibleChips null and renders individual chips', () => {
+      const fifty = Array.from({ length: 50 }, (_, i) => ({
+        value: `v${i}`,
+        label: `Item ${i}`,
+        selected: true,
+      }));
+      const control = setup({ delayedLoad: true });
+      control.setItems(fifty);
+
+      expect(control.selectedItems).toHaveLength(50);
+      expect(control.options.maxVisibleChips).toBeNull();
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      expect(control.selectionBox.chips).toHaveLength(50);
     });
   });
 });

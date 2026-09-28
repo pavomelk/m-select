@@ -5,6 +5,16 @@
 
 const LOG_LEVELS = ['silent', 'error', 'warn', 'info', 'debug'];
 
+/**
+ * Preset-selection safeguard limits: when a setItems call instantiates more than
+ * PRESET_SELECTION_LIMIT already-selected Items while maxVisibleChips is left
+ * null, the component enforces maxVisibleChips = PRESET_MAX_VISIBLE_CHIPS so the
+ * SelectionBox collapses to the summary Chip instead of flooding the DOM with
+ * hundreds of individual Chips. The cap applies only at instantiation.
+ */
+const PRESET_SELECTION_LIMIT = 50;
+const PRESET_MAX_VISIBLE_CHIPS = 25;
+
 import { MODES, filterMode, dropdownMode, chipMode, collapsedMode } from './modes.js';
 
 /**
@@ -185,6 +195,8 @@ export class Item {
     this.#visible = spec.visible === undefined ? true : Boolean(spec.visible);
     this.parent = parent;
     this.owner = null;
+    this.itemView = null;
+    this.chipView = null;
 
     this.element = document.createElement('div');
     this.element.className = 'cm-item__children';
@@ -480,6 +492,18 @@ export class Item {
     });
 
     this.itemView = li;
+  }
+
+  /**
+   * Public: lazily builds this Item's Chip view — the individual "chip" shown in
+   * the SelectionBox while the Item is selected and the selection is not
+   * collapsed. Cheap in the common case of few selected Items among many, since
+   * unselected and collapsed-away Items build no chip at all. Idempotent: the
+   * cached Chip view is returned on repeated calls.
+   * @returns {HTMLElement}
+   */
+  buildChipView() {
+    if (this.chipView) return this.chipView;
 
     const chip = document.createElement('span');
     chip.className = 'cm-chip';
@@ -506,6 +530,12 @@ export class Item {
 
     chip.append(chipLabel, x);
     this.chipView = chip;
+    return chip;
+  }
+
+  /** Public: returns this Item's Chip view, creating it when absent. */
+  ensureChipView() {
+    return this.chipView || this.buildChipView();
   }
 
   /**
@@ -683,6 +713,7 @@ class SelectionBox {
 
   /** Recomputes the displayed collapse state from the selection count. */
   #updateCollapsedState() {
+    this.#ensureCollapsedChip();
     const max = this.control.options.maxVisibleChips;
     if (max == null) {
       this.#collapsed = false;
@@ -693,13 +724,24 @@ class SelectionBox {
   }
 
   /**
+   * Creates the CollapsedChip on first need. The component instantiates it
+   * eagerly when maxVisibleChips is known up front; when a delayed setItems
+   * enforces the cap later (preset-selection safeguard) it is created here.
+   * @private
+   */
+  #ensureCollapsedChip() {
+    if (this.collapsedChip == null && this.control.options.maxVisibleChips != null) {
+      this.collapsedChip = new CollapsedChip();
+    }
+  }
+
+  /**
    * Adds the given Item's chipView to the selection box.
    * @param {Item} item
    */
   add(item) {
     if (this.items.includes(item)) return;
     this.items.push(item);
-    this.chips.push(item.chipView);
     this.#updateCollapsedState();
 
     if (this.isCollapsed) {
@@ -709,6 +751,7 @@ class SelectionBox {
       return;
     }
 
+    this.chips.push(item.ensureChipView());
     const list = this.control.orderedChips();
     const index = list.indexOf(item);
     const next = list[index + 1];
@@ -739,7 +782,9 @@ class SelectionBox {
       this.chipsEl.append(this.collapsedChip.chipView);
     } else if (wasCollapsed) {
       this.chipsEl.innerHTML = '';
-      this.control.orderedChips().forEach((item) => this.chipsEl.append(item.chipView));
+      this.control
+        .orderedChips()
+        .forEach((item) => this.chipsEl.append(item.ensureChipView()));
     } else if (Array.from(this.chipsEl.children).includes(item.chipView)) {
       this.chipsEl.removeChild(item.chipView);
     }
@@ -775,6 +820,17 @@ class SelectionBox {
    */
   chip(value) {
     return this.items.find((item) => item.value === value);
+  }
+
+  /**
+   * Drops every stored selection state, used when the whole Item tree is
+   * replaced via setItems. Individual Chips are re-created lazily.
+   */
+  clear() {
+    this.items = [];
+    this.chips = [];
+    this.collapsedChip = null;
+    this.keepCollapsed = false;
   }
 
   /** The Items currently shown as chips, in the order they are placed. */
@@ -817,7 +873,7 @@ class SelectionBox {
       this.collapsedChip.update(this.control.selectedItems.length);
       this.chipsEl.append(this.collapsedChip.chipView);
     } else {
-      this.control.orderedChips().forEach((item) => this.chipsEl.append(item.chipView));
+      this.control.orderedChips().forEach((item) => this.chipsEl.append(item.ensureChipView()));
     }
   }
 }
@@ -905,16 +961,25 @@ class DropDown {
     this.currentItem = item;
   }
 
+  /**
+   * Shows the DropDown.
+   * @fires CmDropdownOpenEvent
+   */
   open() {
     this.el.classList.add('cm-dropdown--open');
     if (this.#currentItem) this.#ensureVisible(this.#currentItem);
+    this.control.emit('cm-dropdown-open', {});
+    this.control.requestItems();
   }
 
+  /**
+   * Hides the DropDown.
+   * @fires CmDropdownCloseEvent
+   */
   close() {
     this.el.classList.remove('cm-dropdown--open');
+    this.control.emit('cm-dropdown-close', {});
   }
-
-  /** Whether the DropDown is currently shown. */
 
   /**
    * Brings the given Item's `itemView` into the DropDown's visible viewport,
@@ -1088,6 +1153,37 @@ class Modes {
 }
 
 /**
+ * Custom events dispatched by the component on its root element (`MSelect#el`).
+ * All are `CustomEvent`s with `bubbles: true`; `detail` carries the payload.
+ * Event types are prefixed `cm-`.
+ *
+ * @typedef {CustomEvent} CmItemsRequestEvent
+ *   Detail: `{}`. One-shot signal that the component needs its Item tree while
+ *   it has none (`delayedLoad: true` and `setItems()` not called yet). Fired on
+ *   the first Filter focus, the first DropDown open, and the first
+ *   toggleAll()/clearAll() while empty; never more than once. The application
+ *   supplies the Items by calling `setItems(specs)` from the listener
+ *   (recommended wiring, see `MSelect#emit`).
+ *
+ * @typedef {CustomEvent<{count: number}>} CmItemsSetEvent
+ *   Detail: `{ count }` — how many Items (including children) were
+ *   instantiated. Fired by `setItems()` only when `delayedLoad` is enabled,
+ *   right after the tree and the preset selection were built.
+ *
+ * @typedef {CustomEvent} CmDropdownOpenEvent
+ *   Detail: `{}`. Fired whenever the DropDown becomes visible (`open()`).
+ *
+ * @typedef {CustomEvent} CmDropdownCloseEvent
+ *   Detail: `{}`. Fired whenever the DropDown becomes hidden (`close()`).
+ *
+ * @typedef {CustomEvent<{from: string, to: string}>} CmModeChangeEvent
+ *   Detail: `{ from, to }` — names of the previous and the current input mode
+ *   (`MODES.FILTER`, `MODES.DROPDOWN`, `MODES.CHIP`, `MODES.COLLAPSED`). Fired
+ *   only for real transitions; assigning the already active mode (e.g.
+ *   re-entering Filter while Filter is active) is a no-op and stays silent.
+ */
+
+/**
  * The component.
  */
 export class MSelect {
@@ -1097,15 +1193,11 @@ export class MSelect {
    */
   constructor(root, config) {
     this.root = root;
-    this.options = config.options || {};
+    this.options = { maxVisibleChips: null, ...(config.options || {}) };
     this.logger = new Logger(this.options.logLevel || 'silent');
 
-    this.dropDown = new DropDown(this, config.items, this.options);
-    this.#assertUniqueValues();
+    this.dropDown = new DropDown(this, [], this.options);
     this.selectionBox = new SelectionBox(this);
-    this.allItems.forEach((item) => {
-      item.owner = this;
-    });
 
     this.el = document.createElement('div');
     this.el.className = 'cm-select';
@@ -1122,12 +1214,20 @@ export class MSelect {
     this.selectionBox.el.addEventListener('click', (e) => this.#onSelectionBoxClick(e));
     document.addEventListener('mousedown', (e) => this.#onDocumentMouseDown(e));
 
+    if (!this.options.delayedLoad) this.setItems(config.items);
+
     this.logger.info('component rendered');
     this.render();
   }
 
   /** @private internal input-mode state machine, exposed only via MSELECT_INTERNALS */
   #modes = new Modes(MODES.FILTER);
+
+  /** @private Whether the Item tree was already instantiated (setItems one-time). */
+  #itemsLoaded = false;
+
+  /** @private Whether the one-shot cm-items-request was already emitted. */
+  #itemsRequested = false;
 
   /**
    * Routes a SelectionBox click to the input mode matching the clicked part.
@@ -1145,7 +1245,7 @@ export class MSelect {
     }
 
     if (closestByClass(target, 'cm-chip--summary')) {
-      this.#modes.current = MODES.COLLAPSED;
+      this.#switchMode(MODES.COLLAPSED);
       this.dropDown.open();
       return;
     }
@@ -1160,7 +1260,7 @@ export class MSelect {
       return;
     }
 
-    this.#modes.current = MODES.DROPDOWN;
+    this.#switchMode(MODES.DROPDOWN);
     this.dropDown.open();
   }
 
@@ -1172,7 +1272,7 @@ export class MSelect {
    * @private
    */
   #activateFilter() {
-    this.#modes.current = MODES.FILTER;
+    this.#switchMode(MODES.FILTER);
     const input = this.selectionBox.filter.el;
     input.readOnly = false;
     if (input !== document.activeElement) input.focus();
@@ -1187,9 +1287,136 @@ export class MSelect {
     this.#modes.processKey(e);
   }
 
-  /** Focus on the Filter means entering the default Filter mode. */
+  /** Focus on the Filter means entering the default Filter mode.
+   * @fires CmItemsRequestEvent on first focus while the component is empty
+   */
   onFilterFocus() {
     this.#activateFilter();
+    this.requestItems();
+  }
+
+  /**
+   * Switches the input mode and emits the cm-mode-change event for real
+   * transitions (same-mode switches are no-ops and stay silent).
+   * @private
+   * @param {string} mode
+   * @returns {boolean} whether a transition actually happened
+   * @fires CmModeChangeEvent
+   */
+  #switchMode(mode) {
+    const from = this.#modes.mode;
+    if (from === mode) return false;
+    this.#modes.current = mode;
+    this.emit('cm-mode-change', { from, to: mode });
+    return true;
+  }
+
+  /**
+   * Dispatches a bubbled CustomEvent of the given type on the component's root
+   * element, carrying the provided detail. This is the single dispatcher behind
+   * the whole public event surface (prefix `cm-`).
+   *
+   * Event contract:
+   * - `cm-items-request`  — detail `{}`; one-shot, fired only while the
+   *   component has no Items (empty `delayedLoad` control): first Filter focus,
+   *   first DropDown open, first toggleAll()/clearAll(). See `requestItems()`.
+   * - `cm-items-set`      — detail `{ count }`; fired by `setItems()` only in
+   *   delayedLoad mode; `count` is the number of instantiated Items.
+   * - `cm-dropdown-open`  — detail `{}`; fired on every `DropDown#open()`.
+   * - `cm-dropdown-close` — detail `{}`; fired on every `DropDown#close()`.
+   * - `cm-mode-change`    — detail `{ from, to }`; fired on real input-mode
+   *   transitions only (see `#switchMode`).
+   *
+   * Example (recommended delayed-load wiring):
+   * ```js
+   * const control = new MSelect(host, { items, options: { delayedLoad: true } });
+   * control.el.addEventListener('cm-items-request', async () => {
+   *   control.setItems(await fetchItems());
+   * });
+   * control.el.addEventListener('cm-items-set', (e) => {
+   *   console.log(`instantiated ${e.detail.count} items`);
+   * });
+   * control.el.addEventListener('cm-mode-change', ({ detail }) => {
+   *   console.log(`mode ${detail.from} -> ${detail.to}`);
+   * });
+   * control.el.addEventListener('cm-dropdown-open', () => console.log('open'));
+   * ```
+   * @param {string} type one of the `cm-*` event types listed above
+   * @param {object} [detail] payload passed through to the listener via `e.detail`
+   * @returns {CustomEvent} the dispatched event, for inspection or chaining
+   */
+  emit(type, detail = {}) {
+    const event = new CustomEvent(type, { detail, bubbles: true });
+    this.el.dispatchEvent(event);
+    return event;
+  }
+
+  /**
+   * Signals that the component needs Items while it has none. With delayedLoad
+   * enabled the first focus/open/toggleAll/clearAll raises the one-shot
+   * "cm-items-request" event so the application can call setItems. A no-op once
+   * Items are present or the request was already made.
+   * @fires CmItemsRequestEvent (one-shot)
+   */
+  requestItems() {
+    if (this.#itemsLoaded || this.#itemsRequested) return;
+    this.#itemsRequested = true;
+    this.emit('cm-items-request', {});
+  }
+
+  /**
+   * Instantiates the whole Item tree, replacing any previous tree. A given
+   * component instantiates at most once: with delayedLoad disabled the
+   * constructor calls setItems(config.items); with delayedLoad enabled the
+   * component stays empty until the application calls setItems (typically in
+   * response to the one-shot cm-items-request event). Calling setItems a second
+   * time throws; later tree adjustments happen by adding/removing Items.
+   *
+   * The new tree fully replaces the old one: the DropDown is rebuilt, the
+   * Current marker and the stored selection are reset, and the selection is
+   * re-seeded from the new specs' `selected: true` flags. Preset selections
+   * beyond PRESET_SELECTION_LIMIT enforce maxVisibleChips.
+   * @param {object[]} [specs]
+   * @returns {MSelect}
+   * @fires CmItemsSetEvent when `delayedLoad` is enabled
+   */
+  setItems(specs) {
+    if (this.#itemsLoaded) {
+      throw new Error('setItems() can only be populated once per component instance');
+    }
+    this.#itemsLoaded = true;
+
+    this.dropDown.itemsEl.innerHTML = '';
+    this.dropDown.items = Item.root(specs || [], this.options, this.dropDown.itemsEl);
+    this.#assertUniqueValues();
+    this.allItems.forEach((item) => {
+      item.owner = this;
+    });
+
+    this.dropDown.clearCurrent();
+    this.selectionBox.clear();
+    this.selectionBox.render();
+
+    const selected = this.selectedItems;
+    if (
+      selected.length > PRESET_SELECTION_LIMIT &&
+      this.options.maxVisibleChips == null
+    ) {
+      this.options.maxVisibleChips = PRESET_MAX_VISIBLE_CHIPS;
+      this.logger.warn(
+        `preset selection of ${selected.length} Items exceeds ${PRESET_SELECTION_LIMIT}; ` +
+          `enforced maxVisibleChips=${PRESET_MAX_VISIBLE_CHIPS}`
+      );
+    }
+
+    for (const item of selected) {
+      this.selectionBox.add(item);
+    }
+
+    if (this.options.delayedLoad) {
+      this.emit('cm-items-set', { count: this.allItems.length });
+    }
+    return this;
   }
 
   /**
@@ -1201,7 +1428,7 @@ export class MSelect {
   #onDocumentMouseDown(e) {
     if (this.el.contains(e.target)) return;
     this.dropDown.close();
-    this.#modes.current = MODES.FILTER;
+    this.#switchMode(MODES.FILTER);
     const input = this.selectionBox.filter.el;
     input.readOnly = true;
     input.blur();
@@ -1293,6 +1520,7 @@ export class MSelect {
 
   clearAll() {
     this.logger.info('clear all');
+    this.requestItems();
     this.items.selectableItems.forEach((i) => {
       if (!i.selected) return;
       i.selected = false;
@@ -1304,6 +1532,7 @@ export class MSelect {
 
   toggleAll() {
     this.logger.info('toggle all');
+    this.requestItems();
     this.dropDown.items.toggle();
     this.selectionBox.filter.query = '';
     this.render();
@@ -1323,7 +1552,7 @@ export class MSelect {
       this.unselectItem(item);
       return;
     }
-    this.#modes.current = MODES.CHIP;
+    this.#switchMode(MODES.CHIP);
     this.dropDown.open();
     this.dropDown.setCurrent(item);
   }
@@ -1338,7 +1567,7 @@ export class MSelect {
   onItemViewClick(item) {
     item.toggle();
     this.dropDown.setCurrent(item);
-    this.#modes.current = MODES.DROPDOWN;
+    this.#switchMode(MODES.DROPDOWN);
   }
 
   render() {
