@@ -1102,7 +1102,7 @@ describe('1. MSelect', () => {
 
     it('1.10.1 assigning currentItem while open scrolls its itemView into view', () => {
       const control = setup();
-      control.dropDown.open();
+      control.dropDown.open = true;
 
       control.dropDown.currentItem = control.items[2];
 
@@ -1112,7 +1112,7 @@ describe('1. MSelect', () => {
 
     it('1.10.2 assigning currentItem while closed does not scroll', () => {
       const control = setup();
-      control.dropDown.close();
+      control.dropDown.open = false;
 
       control.dropDown.currentItem = control.items[1];
 
@@ -1122,7 +1122,7 @@ describe('1. MSelect', () => {
 
     it('1.10.3 changing currentItem while open scrolls only the newly current itemView', () => {
       const control = setup();
-      control.dropDown.open();
+      control.dropDown.open = true;
 
       control.dropDown.currentItem = control.items[0];
       control.dropDown.currentItem = control.items[2];
@@ -1136,7 +1136,7 @@ describe('1. MSelect', () => {
       const control = setup();
       control.dropDown.currentItem = control.items[3];
 
-      control.dropDown.open();
+      control.dropDown.open = true;
 
       expect(control.items[3].itemView.scrollIntoViewCalls).toBe(1);
     });
@@ -1227,7 +1227,6 @@ describe('1. MSelect', () => {
         expect(item.parent).toBeTruthy();
       }
       expect(control.items.isRoot).toBe(true);
-      expect(control.items.hasParent).toBe(false);
       expect(control.items.depth).toBe(-1);
     });
 
@@ -1236,12 +1235,13 @@ describe('1. MSelect', () => {
       const fruit = control.items[0];
 
       expect(control.items.isRoot).toBe(true);
-      expect(control.items.hasParent).toBe(false);
       expect(control.items.depth).toBe(-1);
 
       expect(fruit.parent).toBe(control.items);
+      expect(fruit.parentItem).toBeNull();
       expect(fruit.depth).toBe(0);
       expect(fruit[0].depth).toBe(1);
+      expect(fruit[0].parentItem).toBe(fruit);
     });
   });
 
@@ -1676,7 +1676,7 @@ describe('1. MSelect', () => {
   });
 
   // requires: options.maxVisibleChips, CollapsedChip (chipView, current,
-  // update), SelectionBox.isCollapsed state, keepCollapsed flag
+  // update), SelectionBox.isCollapsed state, the holds-collapse anchor
   describe('14. Collapsed Chip', () => {
     const setup = (extraItems) => {
       const host = document.createElement('div');
@@ -1845,19 +1845,22 @@ describe('1. MSelect', () => {
       );
     });
 
-    it('1.14.12 the keepCollapsed flag defaults to false', () => {
+    it('1.14.12 no collapse is held until a Collapsed-mode interaction anchors it', () => {
       const control = setup();
-      expect(control.selectionBox.keepCollapsed).toBe(false);
+      expect(control.holdsCollapse).toBe(false);
+      expect(control.selectionBox.isCollapsed).toBe(false);
     });
 
-    it('1.14.13 with keepCollapsed, remove() keeps the Collapsed chip while at least one Item remains selected', () => {
+    it('1.14.13 while anchored on the Collapsed chip, remove() keeps it while an Item remains', () => {
       const control = setup([{ value: 'd', label: 'Delta' }]);
-      control.selectionBox.keepCollapsed = true;
       for (const item of control.items) {
         item.selected = true;
         control.selectionBox.add(item);
       }
       expect(control.selectionBox.isCollapsed).toBe(true);
+
+      control.switchMode('collapsed');
+      expect(control.holdsCollapse).toBe(true);
 
       control.items[3].selected = false;
       control.selectionBox.remove(control.items[3]);
@@ -1875,14 +1878,16 @@ describe('1. MSelect', () => {
       expect(control.selectionBox.collapsedChip.chipView.textContent).toBe('2 items selected');
     });
 
-    it('1.14.14 with keepCollapsed, removing the last Item expands the box', () => {
+    it('1.14.14 while anchored on the Collapsed chip, removing the last Item expands the box', () => {
       const control = setup();
-      control.selectionBox.keepCollapsed = true;
       for (const item of control.items) {
         item.selected = true;
         control.selectionBox.add(item);
       }
       expect(control.selectionBox.isCollapsed).toBe(true);
+
+      control.switchMode('collapsed');
+      expect(control.holdsCollapse).toBe(true);
 
       for (const item of [...control.items].reverse()) {
         item.selected = false;
@@ -1894,6 +1899,28 @@ describe('1. MSelect', () => {
       expect(control.selectionBox.chipsEl.children).not.toContain(
         control.selectionBox.collapsedChip.chipView
       );
+    });
+
+    it('1.14.15 removing a Group with no value leaves Current where it is', () => {
+      // A Group carrying no value is never added to the box, so unselecting it
+      // as a whole must not be mistaken for a chip vacating its slot: other
+      // chips are still there and the marker must not be handed to one.
+      const control = setup([
+        { label: 'Cities', items: [{ value: 'p', label: 'Paris' }] },
+      ]);
+      const cities = control.items[3];
+      const alpha = control.items[0];
+
+      alpha.toggle(true);
+      cities.toggle();
+      expect(control.selectionBox.items.map((i) => i.label)).toEqual(['Alpha', 'Paris']);
+      control.dropDown.setCurrent(cities);
+
+      cities.toggle();
+
+      expect(control.selectionBox.items.map((i) => i.label)).toEqual(['Alpha']);
+      expect(control.dropDown.currentItem).toBe(cities);
+      expect(alpha.current).toBe(false);
     });
   });
 
@@ -1931,7 +1958,7 @@ describe('1. MSelect', () => {
 
     const modes = (control) => control[MSELECT_INTERNALS].modes;
     const isOpen = (control) =>
-      control.dropDown.el.classList.contains('cm-dropdown--open');
+      control.dropDown.open;
 
     it('1.15.1 the internal Modes object is reachable only through the exported symbol and defaults to "filter"', () => {
       const control = setup();
@@ -2115,7 +2142,7 @@ describe('1. MSelect', () => {
 
     const modes = (control) => control[MSELECT_INTERNALS].modes;
     const isOpen = (control) =>
-      control.dropDown.el.classList.contains('cm-dropdown--open');
+      control.dropDown.open;
 
     it('1.16.1 clicking the Item view toggles its selection, adds its Chip and marks it Current', () => {
       const control = setup();
@@ -2254,7 +2281,7 @@ describe('1. MSelect', () => {
 
     const modes = (control) => control[MSELECT_INTERNALS].modes;
     const isOpen = (control) =>
-      control.dropDown.el.classList.contains('cm-dropdown--open');
+      control.dropDown.open;
 
     const xOf = (item) =>
       item.chipView.children.find((el) => el.classList.contains('cm-chip__x'));
@@ -2281,14 +2308,18 @@ describe('1. MSelect', () => {
       expect(control.dropDown.currentItem).toBe(control.items[1]);
     });
 
-    it('1.17.3 removing the only remaining Current chip leaves no chip Current', () => {
+    it('1.17.3 removing the only remaining Current chip leaves Current on that Item', () => {
       const control = setup();
       control.items[0].toggle(true);
       control.dropDown.setCurrent(control.items[0]);
 
       xOf(control.items[0]).click();
 
-      expect(control.dropDown.currentItem).toBeNull();
+      // No chip is left to hand "Current" over to, so the marker stays where the
+      // user put it rather than being dropped.
+      expect(control.selectionBox.items).toHaveLength(0);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.items[0].current).toBe(true);
     });
 
     it('1.17.4 removing a chip that is not Current leaves "Current" untouched', () => {
@@ -2314,6 +2345,21 @@ describe('1. MSelect', () => {
 
       expect(isOpen(control)).toBe(false);
       expect(modes(control).mode).toBe('filter');
+    });
+
+    it('1.17.7 unselecting the last selected Item leaves Current on that Item', () => {
+      const control = setup();
+      control.items[1].toggle(true);
+      control.dropDown.setCurrent(control.items[1]);
+
+      control.unselectItem(control.items[1]);
+
+      expect(control.selectedItems).toHaveLength(0);
+      // No chip is left to promote to, and the Item just unselected is still in
+      // the list, so the marker stays where the user left it.
+      expect(control.selectionBox.items).toHaveLength(0);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(control.items[1].current).toBe(true);
     });
   });
 
@@ -2404,7 +2450,7 @@ describe('1. MSelect', () => {
     };
     const modes = (control) => control[MSELECT_INTERNALS].modes;
     const isOpen = (control) =>
-      control.dropDown.el.classList.contains('cm-dropdown--open');
+      control.dropDown.open;
     const keydown = (element, key) =>
       element.dispatchEvent({
         type: 'keydown',
@@ -2414,27 +2460,29 @@ describe('1. MSelect', () => {
 
     it('1.19.1 focusing the Filter enters Filter mode with the caret enabled', () => {
       const control = setup();
-      control.dropDown.open();
+      control.dropDown.open = true;
       control.selectionBox.filter.el.dispatchEvent({ type: 'focus' });
 
       expect(modes(control).mode).toBe('filter');
       expect(control.selectionBox.filter.el.readOnly).toBe(false);
     });
 
-    it('1.19.2 ArrowDown in Filter mode opens a closed DropDown and makes the first visible item Current', () => {
+    it('1.19.2 ArrowDown in Filter mode opens a closed DropDown, makes the first visible item Current and enters DropDown mode', () => {
       const control = setup();
       expect(isOpen(control)).toBe(false);
       expect(control.dropDown.currentItem).toBeNull();
+      expect(modes(control).mode).toBe('filter');
 
       keydown(control.selectionBox.filter.el, 'ArrowDown');
 
       expect(isOpen(control)).toBe(true);
       expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(modes(control).mode).toBe('dropdown');
     });
 
-    it('1.19.3 ArrowDown with the DropDown already open keeps the first visible item Current', () => {
+    it('1.19.3 ArrowDown with the DropDown already open enters DropDown mode with the marker left as-is', () => {
       const control = setup();
-      control.dropDown.open();
+      control.dropDown.open = true;
       control.items[1].toggle(true);
       control.dropDown.setCurrent(control.items[1]);
 
@@ -2442,9 +2490,10 @@ describe('1. MSelect', () => {
 
       expect(isOpen(control)).toBe(true);
       expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(modes(control).mode).toBe('dropdown');
     });
 
-    it('1.19.4 ArrowDown respects the filter: with only matching Items visible, the first visible one is Current', () => {
+    it('1.19.4 ArrowDown respects the filter and enters DropDown mode: with only matching Items visible, the first visible one is Current', () => {
       const control = setup();
       control.selectionBox.filter.query = 'a'; // visible: Alpha, Charlie
 
@@ -2452,6 +2501,7 @@ describe('1. MSelect', () => {
 
       expect(isOpen(control)).toBe(true);
       expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(modes(control).mode).toBe('dropdown');
     });
   });
 
@@ -2527,6 +2577,45 @@ describe('1. MSelect', () => {
       modes(control).changeToPrevious();
       expect(modes(control).mode).toBe('dropdown');
     });
+
+    it('1.20.6 a transition requested directly on the machine emits cm-mode-change {from, to}', () => {
+      const control = setup();
+      const seen = [];
+      control.el.addEventListener('cm-mode-change', (e) => seen.push(e.detail));
+
+      modes(control).current = 'collapsed';
+
+      expect(seen).toEqual([{ from: 'filter', to: 'collapsed' }]);
+    });
+
+    it('1.20.7 same-mode assignment stays silent and changeToPrevious emits the return transition', () => {
+      const control = setup();
+      const seen = [];
+      control.el.addEventListener('cm-mode-change', (e) => seen.push(e.detail));
+
+      modes(control).current = 'collapsed';
+      modes(control).current = 'collapsed';
+      modes(control).changeToPrevious();
+
+      expect(seen).toEqual([
+        { from: 'filter', to: 'collapsed' },
+        { from: 'collapsed', to: 'filter' },
+      ]);
+    });
+
+    it('1.20.8 leaving Filter mode hides the caret but keeps the focus on the Filter for the whole session', () => {
+      const control = setup();
+      const input = control.selectionBox.filter.el;
+
+      input.focus();
+      modes(control).current = 'chip';
+      expect(input.readOnly).toBe(true);
+      expect(document.activeElement).toBe(input);
+
+      modes(control).current = 'filter';
+      expect(input.readOnly).toBe(false);
+      expect(document.activeElement).toBe(input);
+    });
   });
 
   // requires: setItems + delayedLoad, cm-* CustomEvents, one-shot items
@@ -2555,7 +2644,7 @@ describe('1. MSelect', () => {
       return seen;
     };
     const isOpen = (control) =>
-      control.dropDown.el.classList.contains('cm-dropdown--open');
+      control.dropDown.open;
 
     it('1.21.1 by default (no delayedLoad) Items are present at construction and a preset selected:true spec already shows its Chip', () => {
       const control = new MSelect(document.createElement('div'), {
@@ -2604,8 +2693,8 @@ describe('1. MSelect', () => {
       const control = setup({ delayedLoad: true });
       const seen = collect(control, 'cm-items-request');
 
-      control.dropDown.open();
-      control.dropDown.open();
+      control.dropDown.open = true;
+      control.dropDown.open = true;
 
       expect(seen).toHaveLength(1);
     });
@@ -2637,7 +2726,7 @@ describe('1. MSelect', () => {
       const seen = collect(control, 'cm-items-request');
 
       control.selectionBox.filter.el.dispatchEvent({ type: 'focus' });
-      control.dropDown.open();
+      control.dropDown.open = true;
 
       expect(seen).toHaveLength(0);
     });
@@ -2660,7 +2749,7 @@ describe('1. MSelect', () => {
       const seen = collect(control, 'cm-items-request');
 
       control.selectionBox.filter.el.dispatchEvent({ type: 'focus' });
-      control.dropDown.open();
+      control.dropDown.open = true;
 
       expect(seen).toHaveLength(0);
     });
@@ -2695,9 +2784,9 @@ describe('1. MSelect', () => {
       const control = setup();
       const seen = collect(control, 'cm-dropdown-open', 'cm-dropdown-close');
 
-      control.dropDown.open();
+      control.dropDown.open = true;
       expect(isOpen(control)).toBe(true);
-      control.dropDown.close();
+      control.dropDown.open = false;
       expect(isOpen(control)).toBe(false);
 
       expect(seen.map((e) => e.type)).toEqual(['cm-dropdown-open', 'cm-dropdown-close']);
@@ -2767,6 +2856,2544 @@ describe('1. MSelect', () => {
       expect(control.options.maxVisibleChips).toBeNull();
       expect(control.selectionBox.isCollapsed).toBe(false);
       expect(control.selectionBox.chips).toHaveLength(50);
+    });
+  });
+
+  // requires: mode handlers returning handled=truthy (preventDefault),
+  // filterMode ArrowLeft → CHIP / COLLAPSED, "passed down to the filter"
+  describe('22. Keyboard - ArrowLeft from Filter mode into the Chips', () => {
+    const setup = (options) => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+        options,
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const keydown = (element, key) => {
+      const preventDefaultCalled = { value: false };
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        preventDefault() {
+          preventDefaultCalled.value = true;
+        },
+      });
+      return preventDefaultCalled;
+    };
+
+    it('1.22.1 with text in the Filter, ArrowLeft is passed down to the input (default text navigation, no mode switch)', () => {
+      const control = setup();
+      control.selectionBox.filter.query = 'a';
+      control.items[0].toggle(true);
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowLeft');
+
+      expect(handled.value).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+    });
+
+    it('1.22.2 with an empty Filter and individual Chips present, ArrowLeft switches to Chip mode and marks the rightmost Chip Current', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      expect(control.selectionBox.isCollapsed).toBe(false);
+
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(control.items[1].chipView.classList.contains('cm-chip--current')).toBe(true);
+      expect(control.items[0].chipView.classList.contains('cm-chip--current')).toBe(false);
+    });
+
+    it('1.22.3 with an empty Filter and no Chips at all, ArrowLeft is passed down to the input', () => {
+      const control = setup();
+      expect(control.selectedItems).toHaveLength(0);
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowLeft');
+
+      expect(handled.value).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+    });
+
+    it('1.22.4 with the Chips collapsed, ArrowLeft on the empty Filter switches to Collapsed mode and marks the Collapsed Chip Current', () => {
+      const control = setup({ maxVisibleChips: 1 });
+      for (const item of [...control.items]) item.toggle(true);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+
+      expect(modes(control).mode).toBe('collapsed');
+      expect(control.selectionBox.collapsedChip.current).toBe(true);
+      expect(
+        control.selectionBox.collapsedChip.chipView.classList.contains('cm-chip--current')
+      ).toBe(true);
+    });
+
+    it('1.22.5 hovering the caret over text keeps text navigation: ArrowLeft with text and no selection is passed down', () => {
+      const control = setup();
+      control.selectionBox.filter.query = 'a';
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowLeft');
+
+      expect(handled.value).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+    });
+  });
+
+  // requires: chipMode ArrowRight (rightmost chip hands back to Filter),
+  // clearCurrent clearing the Current marker on Item and Chip view
+  describe('23. Keyboard - ArrowRight from Chip mode back to the Filter', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const keydown = (element, key) => {
+      const preventDefaultCalled = { value: false };
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        preventDefault() {
+          preventDefaultCalled.value = true;
+        },
+      });
+      return preventDefaultCalled;
+    };
+    const enterChipMode = (control) => {
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+    };
+
+    it('1.23.1 ArrowRight with the rightmost Chip Current exits to Filter mode and clears the Current marker on the Item and its Chip view', () => {
+      const control = setup();
+      enterChipMode(control);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowRight');
+
+      expect(handled.value).toBe(true);
+      expect(modes(control).mode).toBe('filter');
+      expect(control.dropDown.currentItem).toBeNull();
+      expect(control.items[1].chipView.classList.contains('cm-chip--current')).toBe(false);
+      expect(control.items[0].chipView.classList.contains('cm-chip--current')).toBe(false);
+    });
+
+    it('1.23.2 ArrowRight while a non-rightmost Chip is Current moves the marker to the next Chip, staying in Chip mode', () => {
+      const control = setup();
+      enterChipMode(control);
+      control.dropDown.setCurrent(control.items[0]);
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowRight');
+
+      expect(handled.value).toBe(true);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(control.items[0].chipView.classList.contains('cm-chip--current')).toBe(false);
+      expect(control.items[1].chipView.classList.contains('cm-chip--current')).toBe(true);
+    });
+
+    it('1.23.3 a selection emptied while in Chip mode defaults back to Filter mode and ArrowRight is left untouched', () => {
+      const control = setup();
+      enterChipMode(control);
+
+      control.clearAll();
+      expect(modes(control).mode).toBe('filter');
+      expect(control.orderedChips()).toHaveLength(0);
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowRight');
+
+      expect(handled.value).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+    });
+  });
+
+  // requires: chipMode ArrowLeft/ArrowRight moving the Current marker between
+  // Chips; leftmost ArrowLeft ignored (consumed, no movement)
+  describe('24. Keyboard - ArrowLeft within Chip mode', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const keydown = (element, key) => {
+      const preventDefaultCalled = { value: false };
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        preventDefault() {
+          preventDefaultCalled.value = true;
+        },
+      });
+      return preventDefaultCalled;
+    };
+    const enterChipMode = (control) => {
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      control.items[2].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+    };
+
+    it('1.24.1 ArrowLeft moves the Current marker one Chip to the left', () => {
+      const control = setup();
+      enterChipMode(control);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowLeft');
+
+      expect(handled.value).toBe(true);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(control.items[2].chipView.classList.contains('cm-chip--current')).toBe(false);
+      expect(control.items[1].chipView.classList.contains('cm-chip--current')).toBe(true);
+    });
+
+    it('1.24.2 ArrowLeft on the leftmost Chip is ignored: the marker stays, mode is kept', () => {
+      const control = setup();
+      enterChipMode(control);
+      control.dropDown.setCurrent(control.items[0]);
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowLeft');
+
+      expect(handled.value).toBe(true);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.items[0].chipView.classList.contains('cm-chip--current')).toBe(true);
+    });
+  });
+
+  // requires: chipMode Delete/Backspace as in text-editing insert mode
+  // (Delete unselects the Current Chip, Backspace the one left of it), plus
+  // the no-Chips-left fallback to Filter mode
+  describe('25. Keyboard - Delete and Backspace within Chip mode', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const keydown = (element, key) => element.dispatchEvent({
+      type: 'keydown',
+      key,
+      preventDefault() {},
+    });
+    const orderedValues = (control) => control.orderedChips().map((i) => i.value);
+    const enterChipMode = (control) => {
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      control.items[2].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+    };
+
+    it('1.25.1 Delete unselects the Current Chip and hands the Current marker to the next Chip', () => {
+      const control = setup();
+      enterChipMode(control);
+      control.dropDown.setCurrent(control.items[1]);
+
+      keydown(control.selectionBox.filter.el, 'Delete');
+
+      expect(control.items[1].selected).toBe(false);
+      expect(orderedValues(control)).toEqual(['a', 'c']);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(modes(control).mode).toBe('chip');
+    });
+
+    it('1.25.2 Delete on the last Chip hands the Current marker to the previous Chip', () => {
+      const control = setup();
+      enterChipMode(control);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+
+      keydown(control.selectionBox.filter.el, 'Delete');
+
+      expect(control.items[2].selected).toBe(false);
+      expect(orderedValues(control)).toEqual(['a', 'b']);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.25.3 Backspace unselects the Chip left of the Current one and keeps the Current marker', () => {
+      const control = setup();
+      enterChipMode(control);
+
+      keydown(control.selectionBox.filter.el, 'Backspace');
+
+      expect(control.items[1].selected).toBe(false);
+      expect(orderedValues(control)).toEqual(['a', 'c']);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(modes(control).mode).toBe('chip');
+    });
+
+    it('1.25.4 Backspace with the leftmost Chip Current is ignored', () => {
+      const control = setup();
+      enterChipMode(control);
+      control.dropDown.setCurrent(control.items[0]);
+
+      keydown(control.selectionBox.filter.el, 'Backspace');
+
+      expect(orderedValues(control)).toEqual(['a', 'b', 'c']);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
+    it('1.25.5 unselecting the last Chip exits Chip mode to Filter with no Current', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      keydown(control.selectionBox.filter.el, 'Delete');
+
+      expect(control.orderedChips()).toHaveLength(0);
+      expect(modes(control).mode).toBe('filter');
+      expect(control.dropDown.currentItem).toBeNull();
+    });
+
+    it('1.25.6 emptying the selection while in Collapsed mode defaults back to Filter', () => {
+      const control = setup();
+      control.options.maxVisibleChips = 1;
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      control.items[2].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(modes(control).mode).toBe('collapsed');
+
+      control.clearAll();
+
+      expect(control.orderedChips()).toHaveLength(0);
+      expect(modes(control).mode).toBe('filter');
+    });
+  });
+
+  // requires: filterMode Backspace taking over at the text's leftmost caret,
+  // unselecting the rightmost Chip while staying in Filter mode
+  describe('26. Keyboard - Backspace in Filter mode unselects the rightmost Chip', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const keydown = (element, key) => {
+      const preventDefaultCalled = { value: false };
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        preventDefault() {
+          preventDefaultCalled.value = true;
+        },
+      });
+      return preventDefaultCalled;
+    };
+    const selectTwo = (control) => {
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+    };
+
+    it('1.26.1 Backspace with an empty Filter unselects the rightmost Chip, staying in Filter mode', () => {
+      const control = setup();
+      selectTwo(control);
+      expect(control.orderedChips()).toHaveLength(2);
+
+      const handled = keydown(control.selectionBox.filter.el, 'Backspace');
+
+      expect(handled.value).toBe(true);
+      expect(modes(control).mode).toBe('filter');
+      expect(control.items[1].selected).toBe(false);
+      expect(control.orderedChips()).toHaveLength(1);
+    });
+
+    it('1.26.2 Backspace with a caret right of the text start is left to the input', () => {
+      const control = setup();
+      selectTwo(control);
+      control.selectionBox.filter.query = 'a';
+      control.selectionBox.filter.el.selectionStart = 1;
+
+      const handled = keydown(control.selectionBox.filter.el, 'Backspace');
+
+      expect(handled.value).toBe(false);
+      expect(control.orderedChips()).toHaveLength(2);
+    });
+
+    it('1.26.3 Backspace with text but the caret at the leftmost position unselects the rightmost Chip', () => {
+      const control = setup();
+      selectTwo(control);
+      control.selectionBox.filter.query = 'a';
+      control.selectionBox.filter.el.selectionStart = 0;
+
+      const handled = keydown(control.selectionBox.filter.el, 'Backspace');
+
+      expect(handled.value).toBe(true);
+      expect(modes(control).mode).toBe('filter');
+      expect(control.items[1].selected).toBe(false);
+      expect(control.orderedChips()).toHaveLength(1);
+    });
+
+    it('1.26.4 Backspace at the leftmost caret with no Chips left is a no-op', () => {
+      const control = setup();
+
+      const handled = keydown(control.selectionBox.filter.el, 'Backspace');
+
+      expect(handled.value).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+      expect(control.orderedChips()).toHaveLength(0);
+    });
+  });
+
+  // requires: chipMode Home/End jumping the Current marker to the first/last
+  // Chip
+  describe('27. Keyboard - Home and End within Chip mode', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const keydown = (element, key) => {
+      const preventDefaultCalled = { value: false };
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        preventDefault() {
+          preventDefaultCalled.value = true;
+        },
+      });
+      return preventDefaultCalled;
+    };
+    const enterChipMode = (control) => {
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      control.items[2].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+    };
+
+    it('1.27.1 Home moves the Current marker to the first Chip', () => {
+      const control = setup();
+      enterChipMode(control);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+
+      const handled = keydown(control.selectionBox.filter.el, 'Home');
+
+      expect(handled.value).toBe(true);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.items[0].chipView.classList.contains('cm-chip--current')).toBe(true);
+      expect(control.items[2].chipView.classList.contains('cm-chip--current')).toBe(false);
+    });
+
+    it('1.27.2 End moves the Current marker to the last Chip', () => {
+      const control = setup();
+      enterChipMode(control);
+      control.dropDown.setCurrent(control.items[0]);
+
+      const handled = keydown(control.selectionBox.filter.el, 'End');
+
+      expect(handled.value).toBe(true);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+    });
+
+    it('1.27.3 with the selection emptied the mode has already reverted to Filter, where Home/End pass through', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+
+      control.clearAll();
+      expect(modes(control).mode).toBe('filter');
+
+      const end = keydown(control.selectionBox.filter.el, 'End');
+      const home = keydown(control.selectionBox.filter.el, 'Home');
+
+      expect(end.value).toBe(false);
+      expect(home.value).toBe(false);
+      expect(control.dropDown.currentItem).toBeNull();
+    });
+  });
+
+  // requires: REQ-3.11-20, REQ-3.10-03 — chipMode ArrowDown opening the
+  // DropDown and scrolling the Current Item into view while staying in Chip
+  // mode, and handing over to DropDown mode on a repeated press
+  describe('28. Keyboard - ArrowDown from Chip mode opens the DropDown', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const keydown = (element, key) => {
+      const preventDefaultCalled = { value: false };
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        preventDefault() {
+          preventDefaultCalled.value = true;
+        },
+      });
+      return preventDefaultCalled;
+    };
+    const enterChipMode = (control) => {
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      control.items[2].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+    };
+
+    it('1.28.1 ArrowDown opens the DropDown and scrolls the Current Item into view, staying in Chip mode', () => {
+      const control = setup();
+      enterChipMode(control);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(handled.value).toBe(true);
+      expect(control.dropDown.open).toBe(true);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(control.items[2].itemView.scrollIntoViewCalls).toBe(1);
+      expect(control.items[2].itemView.classList.contains('cm-item--current')).toBe(true);
+    });
+
+    it('1.28.2 a repeated ArrowDown moves on to DropDown mode, keeping the Current Item', () => {
+      const control = setup();
+      enterChipMode(control);
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(handled.value).toBe(true);
+      expect(control.dropDown.open).toBe(true);
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(control.items[2].itemView.scrollIntoViewCalls).toBe(1);
+      expect(control.items[2].itemView.classList.contains('cm-item--current')).toBe(true);
+    });
+
+    it('1.28.3 the DropDown continues from the Current Item after the handover', () => {
+      const control = setup();
+      enterChipMode(control);
+      control.selectionBox.selectFirst();
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.28.4 the handover happens only on the repeated press', () => {
+      const control = setup();
+      enterChipMode(control);
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(handled.value).toBe(true);
+      expect(control.dropDown.open).toBe(true);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(control.items[2].itemView.scrollIntoViewCalls).toBe(1);
+      expect(control.items[2].itemView.classList.contains('cm-item--current')).toBe(true);
+    });
+  });
+
+  // requires: Escape handling in every mode (closes the DropDown), in DropDown
+  // mode also returning to the previous mode; public MSelect#changeToPrevious
+  // with its no-previous fallback to Filter
+  describe('29. Keyboard - Escape closes the DropDown in every mode', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const keydown = (element, key) => {
+      const preventDefaultCalled = { value: false };
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        preventDefault() {
+          preventDefaultCalled.value = true;
+        },
+      });
+      return preventDefaultCalled;
+    };
+
+    it('1.29.1 Escape in Filter mode closes the DropDown and stays in Filter', () => {
+      const control = setup();
+      control.dropDown.open = true;
+
+      const handled = keydown(control.selectionBox.filter.el, 'Escape');
+
+      expect(handled.value).toBe(true);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+    });
+
+    it('1.29.2 Escape in DropDown mode closes the DropDown and returns to the previous mode', () => {
+      const control = setup();
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.open).toBe(true);
+
+      const handled = keydown(control.selectionBox.filter.el, 'Escape');
+
+      expect(handled.value).toBe(true);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+    });
+
+    it('1.29.3 Escape in Chip mode closes the DropDown and stays in Chip', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.open).toBe(true);
+
+      const handled = keydown(control.selectionBox.filter.el, 'Escape');
+
+      expect(handled.value).toBe(true);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.29.4 Escape in Collapsed mode closes the DropDown and stays in Collapsed', () => {
+      const control = setup();
+      control.options.maxVisibleChips = 1;
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      control.items[2].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(modes(control).mode).toBe('collapsed');
+      control.dropDown.open = true;
+
+      const handled = keydown(control.selectionBox.filter.el, 'Escape');
+
+      expect(handled.value).toBe(true);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control).mode).toBe('collapsed');
+    });
+
+    it('1.29.5 changeToPrevious without a recorded previous mode falls back to Filter and logs a warning', () => {
+      const control = setup();
+      const warn = vi.spyOn(control.logger, 'warn');
+      expect(control[MSELECT_INTERNALS].modes.previous).toBeNull();
+
+      const transitioned = control.changeToPrevious();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(transitioned).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+    });
+  });
+
+  // requires: REQ-3.11-12, REQ-3.11-20, REQ-3.11-21 — collapsedMode ArrowRight
+  // exiting to Filter, ArrowDown opening the DropDown and a repeated press
+  // handing over to DropDown mode with the selected-only restriction kept, the
+  // CollapsedChip "current" marker living in the mode lifecycle (onEntry/onLeave)
+  // so the chip only looks selected there, and a selection change re-filtering a
+  // restricted list
+  describe('30. Keyboard - Collapsed mode navigation', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        options: { maxVisibleChips: 1 },
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const keydown = (element, key) => {
+      const preventDefaultCalled = { value: false };
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        preventDefault() {
+          preventDefaultCalled.value = true;
+        },
+      });
+      return preventDefaultCalled;
+    };
+    const selectAll = (control) => {
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      control.items[2].toggle(true);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+    };
+    const groupSetup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        options: { maxVisibleChips: 1 },
+        items: [
+          { value: 'a', label: 'Alpha' },
+          {
+            label: 'Cities',
+            items: [
+              { value: 'lyon', label: 'Lyon' },
+              { value: 'nice', label: 'Nice' },
+            ],
+          },
+        ],
+      });
+    };
+    /** Selects the group as a whole (which selects both of its children). */
+    const selectAllOfGroup = (control) => {
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+    };
+
+    it('1.30.1 ArrowRight in Collapsed mode exits to Filter and clears the Collapsed Chip selection marker', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(modes(control).mode).toBe('collapsed');
+      expect(control.selectionBox.collapsedChip.current).toBe(true);
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowRight');
+
+      expect(handled.value).toBe(true);
+      expect(modes(control).mode).toBe('filter');
+      expect(control.selectionBox.collapsedChip.current).toBe(false);
+      expect(
+        control.selectionBox.collapsedChip.chipView.classList.contains('cm-chip--current')
+      ).toBe(false);
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+    });
+
+    it('1.30.2 ArrowDown in Collapsed mode opens the DropDown and stays in Collapsed', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(modes(control).mode).toBe('collapsed');
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(handled.value).toBe(true);
+      expect(control.dropDown.open).toBe(true);
+      expect(modes(control).mode).toBe('collapsed');
+      expect(control.selectionBox.collapsedChip.current).toBe(true);
+    });
+
+    it('1.30.3 a repeated ArrowDown moves on to DropDown mode, still restricted to the selected Items', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('collapsed');
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+
+      const handled = keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(handled.value).toBe(true);
+      expect(control.dropDown.open).toBe(true);
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      expect(control.selectionBox.collapsedChip.current).toBe(false);
+    });
+
+    it('1.30.4 the selected-Items list navigated after the handover holds only selected Items', () => {
+      const control = setup();
+      selectAll(control);
+      control.items[2].toggle(false);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      expect(control.items[2].visible).toBe(false);
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
+    it('1.30.5 unselecting an Item while the DropDown shows only the selected removes it from the list', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      expect(control.items[1].visible).toBe(true);
+
+      control.unselectItem(control.items[1]);
+
+      expect(control.items[1].selected).toBe(false);
+      expect(control.items[1].visible).toBe(false);
+      expect(control.items[1].itemView.classList.contains('cm-item--hidden')).toBe(true);
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[2].visible).toBe(true);
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+    });
+
+    it('1.30.6 toggling an Item off with SpaceBar also removes it from the restricted list', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      control.dropDown.setCurrent(control.items[1]);
+
+      keydown(control.selectionBox.filter.el, ' ');
+
+      expect(control.items[1].selected).toBe(false);
+      expect(control.items[1].visible).toBe(false);
+      expect(control.items[1].itemView.classList.contains('cm-item--hidden')).toBe(true);
+      expect(modes(control).mode).toBe('dropdown');
+    });
+
+    it('1.30.7 a selection change leaves the text-filtered list alone', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.selectionBox.filter.query = 'Al';
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[1].visible).toBe(false);
+
+      control.items[1].toggle(true);
+
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[1].visible).toBe(false);
+      expect(control.items[2].visible).toBe(false);
+    });
+
+    it('1.30.8 leaving Collapsed mode through the Filter clears the marker and shows the chip unselected in Filter', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(control.selectionBox.collapsedChip.current).toBe(true);
+
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.selectionBox.filter.el,
+      });
+
+      expect(modes(control).mode).toBe('filter');
+      expect(control.selectionBox.collapsedChip.current).toBe(false);
+      expect(
+        control.selectionBox.collapsedChip.chipView.classList.contains('cm-chip--current')
+      ).toBe(false);
+    });
+
+    it('1.30.9 a collapsed selection sitting in Filter mode shows the Collapsed Chip without the marker', () => {
+      const control = setup();
+      selectAll(control);
+      expect(modes(control).mode).toBe('filter');
+
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      expect(control.selectionBox.collapsedChip.current).toBe(false);
+      expect(
+        control.selectionBox.collapsedChip.chipView.classList.contains('cm-chip--current')
+      ).toBe(false);
+    });
+
+    it('1.30.10 a Group without a value leaves the restricted list once its children are all off', () => {
+      const control = groupSetup();
+      selectAllOfGroup(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      const [lyon, nice] = control.items[1];
+      expect(control.items[1].visible).toBe(true);
+
+      control.unselectItem(lyon);
+      expect(control.items[1].visible).toBe(true);
+
+      control.unselectItem(nice);
+
+      expect(control.items[1].selected).toBe(true);
+      expect(control.items[1].selectedCount).toBe(0);
+      expect(control.items[1].selectionState).toBe('none');
+      expect(control.items[1].visible).toBe(false);
+      expect(control.items[1].itemView.classList.contains('cm-item--hidden')).toBe(true);
+    });
+
+    it('1.30.11 a Group holding a selected child stays in the restricted list', () => {
+      const control = groupSetup();
+      selectAllOfGroup(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      const [lyon] = control.items[1];
+
+      control.unselectItem(lyon);
+
+      expect(control.items[1].selectedCount).toBe(1);
+      expect(control.items[1].selectionState).toBe('partial');
+      expect(control.items[1].visible).toBe(true);
+    });
+
+    it('1.30.12 a DropDown entered from Collapsed mode holds the collapse below max', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('dropdown');
+
+      control.unselectItem(control.items[2]);
+      expect(control.selectedItems.length).toBe(2);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+
+      control.unselectItem(control.items[1]);
+
+      expect(control.selectedItems.length).toBe(1);
+      expect(control.holdsCollapse).toBe(true);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      expect(Array.from(control.selectionBox.chipsEl.children)).toEqual([
+        control.selectionBox.collapsedChip.chipView,
+      ]);
+      expect(modes(control).mode).toBe('dropdown');
+    });
+
+    it('1.30.12.1 a DropDown entered from Chip mode leaves the collapse to the count', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(modes(control).mode).toBe('chip');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.holdsCollapse).toBe(false);
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+
+      control.items[2].toggle(true);
+      expect(control.selectedItems.length).toBe(2);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+
+      control.items[2].toggle(false);
+
+      expect(control.selectedItems.length).toBe(1);
+      expect(control.holdsCollapse).toBe(false);
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      expect(control.selectionBox.items).toEqual([control.items[0]]);
+    });
+
+    it('1.30.13 the collapse is released once nothing is selected', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      control.unselectItem(control.items[2]);
+      control.unselectItem(control.items[1]);
+      control.unselectItem(control.items[0]);
+
+      expect(control.selectedItems.length).toBe(0);
+      expect(control.selectionBox.isCollapsed).toBe(false);
+    });
+
+    it('1.30.14 Collapsed mode holds the collapse and releases it on leaving', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(modes(control).mode).toBe('collapsed');
+      expect(control.holdsCollapse).toBe(true);
+
+      control.unselectItem(control.items[2]);
+      control.unselectItem(control.items[1]);
+
+      expect(control.selectedItems.length).toBe(1);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      expect(control.selectionBox.collapsedChip.current).toBe(true);
+
+      keydown(control.selectionBox.filter.el, 'ArrowRight');
+
+      expect(modes(control).mode).toBe('filter');
+      expect(control.holdsCollapse).toBe(false);
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      expect(control.selectionBox.items).toEqual([control.items[0]]);
+    });
+
+    it('1.30.15 the count at maxVisibleChips shows individual Chips, not a summary', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { maxVisibleChips: 2 },
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      expect(control.selectionBox.isCollapsed).toBe(false);
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.holdsCollapse).toBe(false);
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      expect(control.selectionBox.items).toEqual([control.items[0], control.items[1]]);
+    });
+
+    it('1.30.16 emptying the selection returns the control to its default state', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      control.dropDown.setCurrent(control.items[0]);
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      control.unselectItem(control.items[2]);
+      control.unselectItem(control.items[1]);
+      expect(modes(control).mode).toBe('dropdown');
+
+      control.unselectItem(control.items[0]);
+
+      expect(control.selectedItems.length).toBe(0);
+      expect(modes(control).mode).toBe('filter');
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      // The Item just unselected is still in the restored full list, so the
+      // marker stays on it rather than being dropped with the restriction.
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.items[0].current).toBe(true);
+      expect(control.holdsCollapse).toBe(false);
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      expect(control.selectionBox.filter.el.readOnly).toBe(false);
+      [...control.items].forEach((item) => {
+        expect(item.visible).toBe(true);
+        expect(item.itemView.classList.contains('cm-item--hidden')).toBe(false);
+      });
+    });
+
+    it('1.30.17 the restored default state navigates the full list again', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      control.unselectItem(control.items[2]);
+      control.unselectItem(control.items[1]);
+      control.unselectItem(control.items[0]);
+      expect(modes(control).mode).toBe('filter');
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
+    it('1.30.18 a Chip/Collapsed normalize that already reached Filter does not re-run it', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(modes(control).mode).toBe('collapsed');
+
+      control.unselectItem(control.items[2]);
+      control.unselectItem(control.items[1]);
+      control.unselectItem(control.items[0]);
+
+      expect(modes(control).mode).toBe('filter');
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      expect(control.selectionBox.filter.el.readOnly).toBe(false);
+    });
+
+    it('1.30.19 clicking an Item in the restricted DropDown keeps the restriction', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+
+      control.items[0].itemView.click();
+
+      expect(control.selectedItems).toHaveLength(2);
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      expect(control.items[0].visible).toBe(false);
+      expect(control.items[1].visible).toBe(true);
+      expect(control.items[2].visible).toBe(true);
+    });
+
+    it('1.30.20 the restriction survives clicks down to a single selected Item', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      control.items[0].itemView.click();
+      control.items[1].itemView.click();
+
+      expect(control.selectedItems).toHaveLength(1);
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      expect(control.items[2].visible).toBe(true);
+      [...control.items].forEach((item, index) => {
+        expect(item.visible).toBe(index === 2);
+      });
+    });
+
+    it('1.30.21 the last click emptying the selection still restores the full list', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      control.items[0].itemView.click();
+      control.items[1].itemView.click();
+      control.items[2].itemView.click();
+
+      expect(control.selectedItems).toHaveLength(0);
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      [...control.items].forEach((item) => {
+        expect(item.visible).toBe(true);
+        expect(item.itemView.classList.contains('cm-item--hidden')).toBe(false);
+      });
+      // The click itself re-enters DropDown mode after the emptying, so the
+      // full list is what is navigated from there, marked at its first Item.
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
+    it('1.30.22 a click that empties the selection marks the first visible Item Current', () => {
+      const control = groupSetup();
+      selectAllOfGroup(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+
+      control.items[0].itemView.click();
+      control.items[1][0].itemView.click();
+      control.items[1][1].itemView.click();
+
+      expect(control.selectedItems).toHaveLength(0);
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.items[0].itemView.classList.contains('cm-item--current')).toBe(true);
+    });
+
+    it('1.30.23 a click that does not empty the selection keeps the clicked Item Current', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+
+      control.items[1].itemView.click();
+
+      expect(control.selectedItems).toHaveLength(2);
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.30.24 a click in an unrestricted list still marks the clicked Item Current', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+
+      control.items[1].itemView.click();
+
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    // A valueless Group owns no Chip, so unselecting it while Current gives
+    // `SelectionBox#remove` nothing to promote from and would strand the marker
+    // on an Item the restricted list has just stopped showing.
+    const strandedSetup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        options: { maxVisibleChips: 1 },
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { label: 'Cities', items: [{ value: 'lyon', label: 'Lyon' }] },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const enterRestrictedFromCollapsed = (control) => {
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+    };
+    const visibleLabels = (control) =>
+      control.allItems.filter((item) => item.navigable).map((item) => item.label);
+
+    it('1.30.25 Space on the Current valueless Group moves Current to the next visible Item', () => {
+      const control = strandedSetup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      control.items[2].toggle(true);
+      enterRestrictedFromCollapsed(control);
+      const cities = control.items[1];
+      expect(visibleLabels(control)).toEqual(['Alpha', 'Cities', 'Lyon', 'Charlie']);
+      control.dropDown.setCurrent(cities);
+
+      keydown(control.selectionBox.filter.el, ' ');
+
+      expect(cities.selected).toBe(false);
+      expect(visibleLabels(control)).toEqual(['Alpha', 'Charlie']);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(cities.current).toBe(false);
+      expect(
+        control.items[2].itemView.classList.contains('cm-item--current')
+      ).toBe(true);
+    });
+
+    it('1.30.26 Space on the Current valueless Group with nothing after it falls back to the last visible Item', () => {
+      const control = strandedSetup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      enterRestrictedFromCollapsed(control);
+      const cities = control.items[1];
+      expect(visibleLabels(control)).toEqual(['Alpha', 'Cities', 'Lyon']);
+      control.dropDown.setCurrent(cities);
+
+      keydown(control.selectionBox.filter.el, ' ');
+
+      expect(visibleLabels(control)).toEqual(['Alpha']);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(cities.current).toBe(false);
+    });
+
+    it('1.30.27 the Current marker is left alone when the DropDown is not restricted', () => {
+      const control = groupSetup();
+      selectAllOfGroup(control);
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      const cities = control.items[1];
+      control.dropDown.setCurrent(cities);
+
+      keydown(control.selectionBox.filter.el, ' ');
+
+      // An unrestricted list keeps the unselected Item visible, so the marker
+      // has somewhere valid to stay.
+      expect(cities.visible).toBe(true);
+      expect(control.dropDown.currentItem).toBe(cities);
+    });
+  });
+
+  // requires: the document-level keydown routing (#onDocumentKeyDown) serving
+  // the component as the keyboard surface while the DropDown is open, with the
+  // per-event dedupe marker in onKeyDown
+  describe('31. Keyboard - the open DropDown makes the component the keyboard surface', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const keydown = (element, key) => {
+      const preventDefaultCalled = { value: false };
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        target: document.body,
+        preventDefault() {
+          preventDefaultCalled.value = true;
+        },
+      });
+      return preventDefaultCalled;
+    };
+
+    it('1.31.1 Escape routed via the document closes the open DropDown and returns to Filter', () => {
+      const control = setup();
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.open).toBe(true);
+
+      const handled = keydown(document, 'Escape');
+
+      expect(handled.value).toBe(true);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+    });
+
+    it('1.31.2 keys from outside the control are ignored while the DropDown is closed', () => {
+      const control = setup();
+
+      const handled = keydown(document, 'ArrowDown');
+
+      expect(handled.value).toBe(false);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+    });
+
+    it('1.31.3 a key already handled by the Filter listener is not processed again at the document level', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      const event = {
+        type: 'keydown',
+        key: 'ArrowLeft',
+        target: control.selectionBox.filter.el,
+        preventDefault() {},
+      };
+
+      control.selectionBox.filter.el.dispatchEvent(event);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+
+      document.dispatchEvent(event);
+
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(control.selectionBox.filter.control).toBe(control);
+    });
+  });
+
+  // requires: the in-control mousedown listener (#onControlMouseDown) keeping
+  // focus on the Filter input when the mouse interacts with the control
+  // (DropDown Items, chips) — a real browser would otherwise move focus to a
+  // non-focusable element / body and detach the keyboard surface
+  describe('32. Mouse - the Filter input stays the keyboard surface', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes;
+    const mousedown = (element) => {
+      const preventDefaultCalled = { value: false };
+      element.dispatchEvent({
+        type: 'mousedown',
+        target: element,
+        preventDefault() {
+          preventDefaultCalled.value = true;
+        },
+      });
+      return preventDefaultCalled;
+    };
+    const keydown = (element, key) => {
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        target: document.body,
+        preventDefault() {},
+      });
+    };
+
+    it('1.32.1 a mousedown on a DropDown Item is prevented so the input keeps focus', () => {
+      const control = setup();
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      control.selectionBox.filter.el.focus();
+      expect(document.activeElement).toBe(control.selectionBox.filter.el);
+
+      const handled = mousedown(control.items[1].itemView);
+
+      expect(handled.value).toBe(true);
+      expect(document.activeElement).toBe(control.selectionBox.filter.el);
+    });
+
+    it('1.32.2 a mousedown on the Filter input itself is not prevented', () => {
+      const control = setup();
+
+      const handled = mousedown(control.selectionBox.filter.el);
+
+      expect(handled.value).toBe(false);
+    });
+
+    it('1.32.3 the control stays responsive after a mouse-selected Item and Escape', () => {
+      const control = setup();
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.open).toBe(true);
+
+      mousedown(control.items[1].itemView);
+      keydown(document, 'Escape');
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control).mode).toBe('filter');
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.dropDown.open).toBe(true);
+      expect(modes(control).mode).toBe('dropdown');
+    });
+
+    it('1.32.4 a mousedown on a chip keeps the Filter input focused', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(modes(control).mode).toBe('chip');
+      control.selectionBox.filter.el.focus();
+
+      const handled = mousedown(control.selectionBox.chipsEl.children[0]);
+
+      expect(handled.value).toBe(true);
+      expect(document.activeElement).toBe(control.selectionBox.filter.el);
+    });
+  });
+
+  // requires: DropDown-mode list navigation over the visible selectable Items
+  // (ArrowUp/ArrowDown move, Home/End jump, PageUp/PageDown page by ten, Enter
+  // toggles the Current Item while the DropDown stays open)
+  describe('33. Keyboard - DropDown mode navigation', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+          { value: 'd', label: 'Delta' },
+          { value: 'e', label: 'Echo' },
+          { value: 'f', label: 'Foxtrot' },
+          { value: 'g', label: 'Golf' },
+          { value: 'h', label: 'Hotel' },
+          { value: 'i', label: 'India' },
+          { value: 'j', label: 'Juliett' },
+          { value: 'k', label: 'Kilo' },
+          { value: 'l', label: 'Lima' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes.mode;
+    const open = (control) => {
+      control.selectionBox.filter.el.dispatchEvent({
+        type: 'keydown',
+        key: 'ArrowDown',
+        target: control.selectionBox.filter.el,
+        preventDefault() {},
+      });
+    };
+    const key = (control, id, keyName) => {
+      const prevented = { value: false };
+      control.selectionBox.filter.el.dispatchEvent({
+        type: 'keydown',
+        key: keyName,
+        target: control.selectionBox.filter.el,
+        preventDefault() {
+          prevented.value = true;
+        },
+      });
+      return prevented;
+    };
+
+    it('1.33.1 ArrowDown moves the Current marker to the next visible Option', () => {
+      const control = setup();
+      open(control);
+      expect(modes(control)).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      key(control, 0, 'ArrowDown');
+
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.33.2 ArrowDown on the last visible Option stays there but is consumed', () => {
+      const control = setup();
+      open(control);
+      control.dropDown.setCurrent(control.items[11]);
+
+      const prevented = key(control, 11, 'ArrowDown');
+
+      expect(control.dropDown.currentItem).toBe(control.items[11]);
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.33.3 ArrowUp moves the Current marker to the previous visible Option', () => {
+      const control = setup();
+      open(control);
+      control.dropDown.setCurrent(control.items[2]);
+
+      key(control, 2, 'ArrowUp');
+
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.33.4 ArrowUp on the first visible Option stays there but is consumed', () => {
+      const control = setup();
+      open(control);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      const prevented = key(control, 0, 'ArrowUp');
+
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.33.5 navigation starts at the first Option when no marker is set', () => {
+      const control = setup();
+      open(control);
+      control.dropDown.clearCurrent();
+
+      key(control, 0, 'ArrowDown');
+
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
+    it('1.33.6 ArrowUp with no marker set starts at the last Option', () => {
+      const control = setup();
+      open(control);
+      control.dropDown.clearCurrent();
+
+      key(control, 0, 'ArrowUp');
+
+      expect(control.dropDown.currentItem).toBe(control.items[11]);
+    });
+
+    it('1.33.7 navigation skips Options hidden by the Filter query', () => {
+      const control = setup();
+      control.selectionBox.filter.query = 'Bravo';
+      open(control);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+
+      key(control, 1, 'ArrowDown');
+
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.33.8 Home jumps to the first visible Option and End to the last', () => {
+      const control = setup();
+      open(control);
+      control.dropDown.setCurrent(control.items[5]);
+
+      key(control, 5, 'Home');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      key(control, 0, 'End');
+      expect(control.dropDown.currentItem).toBe(control.items[11]);
+    });
+
+    it('1.33.9 PageDown pages forward and PageUp pages back by ten', () => {
+      const control = setup();
+      open(control);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      key(control, 0, 'PageDown');
+      expect(control.dropDown.currentItem).toBe(control.items[10]);
+
+      control.dropDown.setCurrent(control.items[2]);
+      key(control, 2, 'PageUp');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
+    it('1.33.10 Enter toggles the Current Item, closes the DropDown and returns to the previous mode', () => {
+      const control = setup();
+      open(control);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      control.items[0].toggle(true);
+      control.dropDown.setCurrent(control.items[1]);
+
+      const prevented = key(control, 1, 'Enter');
+
+      expect(control.items[1].selected).toBe(true);
+      expect(control.selectionBox.items).toContain(control.items[1]);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control)).toBe('filter');
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.33.11 Enter unselects an already selected Current Item and closes the DropDown', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      open(control);
+
+      key(control, 0, 'Enter');
+
+      expect(control.items[0].selected).toBe(false);
+      expect(control.selectionBox.items).not.toContain(control.items[0]);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control)).toBe('filter');
+    });
+
+    it('1.33.12 Enter with no Current Item closes the DropDown and returns to the previous mode without changing the selection', () => {
+      const control = setup();
+      open(control);
+      control.dropDown.clearCurrent();
+
+      const prevented = key(control, 0, 'Enter');
+
+      expect(control.selectionBox.items).toHaveLength(0);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control)).toBe('filter');
+      expect(prevented.value).toBe(true);
+    });
+  });
+
+  // requires: clicking the Filter opening the DropDown without setting any
+  // Current marker (list navigation starts only from DropDown mode)
+  describe('34. Mouse - clicking the Filter opens the DropDown without a Current Item', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+
+    it('1.34.1 clicking the Filter opens the DropDown leaving no Item Current', () => {
+      const control = setup();
+      expect(control.dropDown.open).toBe(false);
+
+      control.selectionBox.filter.el.click();
+
+      expect(control.dropDown.open).toBe(true);
+      expect(control.dropDown.currentItem).toBeNull();
+    });
+
+    it('1.34.2 clicking the Filter never marks an Item Current, whatever the query', () => {
+      const control = setup();
+      control.selectionBox.filter.query = 'Bravo';
+
+      control.selectionBox.filter.el.click();
+
+      expect(control.dropDown.open).toBe(true);
+      expect(control.dropDown.currentItem).toBeNull();
+    });
+
+    it('1.34.3 clicking the Filter while the DropDown is already open leaves the marker', () => {
+      const control = setup();
+      control.selectionBox.filter.el.click();
+      control.dropDown.setCurrent(control.items[2]);
+
+      control.selectionBox.filter.el.click();
+
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(control.dropDown.open).toBe(true);
+    });
+  });
+
+  // requires: entering Filter mode clearing the "Current" marker, so a return
+  // to Filter (Escape from DropDown, exit from Chip/Collapsed, normalize-mode
+  // fallback) never leaves a Chip looking Current
+  describe('35. Keyboard - returning to Filter mode clears the Current marker', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes.mode;
+    const keydown = (element, key) => {
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        target: document.body,
+        preventDefault() {},
+      });
+    };
+
+    it('1.35.1 returning from DropDown to Filter via Escape clears the marker from a selected Item and its Chip', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control)).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.items[0].current).toBe(true);
+      expect(control.items[0].chipView.classList.contains('cm-chip--current')).toBe(true);
+
+      keydown(control.selectionBox.filter.el, 'Escape');
+
+      expect(modes(control)).toBe('filter');
+      expect(control.dropDown.currentItem).toBeNull();
+      expect(control.items[0].current).toBe(false);
+      expect(control.items[0].chipView.classList.contains('cm-chip--current')).toBe(false);
+      expect(control.items[0].itemView.classList.contains('cm-item--current')).toBe(false);
+    });
+
+    it('1.35.2 returning from DropDown to Filter via Escape clears a marker on an unselected Item too', () => {
+      const control = setup();
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      keydown(control.selectionBox.filter.el, 'Escape');
+
+      expect(modes(control)).toBe('filter');
+      expect(control.dropDown.currentItem).toBeNull();
+      expect(control.items[0].itemView.classList.contains('cm-item--current')).toBe(false);
+    });
+  });
+
+  // requires: Filter-mode ArrowDown marking the first visible Item Current when
+  // no marker is set, even when the DropDown is already open (the mouse-open
+  // path), so list navigation starts on the very first ArrowDown
+  describe('36. Keyboard - after a mouse-open the first ArrowDown enters DropDown mode on the first visible Item', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes.mode;
+    const keydown = (element, key) => {
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        target: element,
+        preventDefault() {},
+      });
+    };
+
+    it('1.36.1 clicking the Filter opens the DropDown; the first ArrowDown enters DropDown mode with the first visible Item Current', () => {
+      const control = setup();
+      control.selectionBox.filter.el.click();
+      expect(modes(control)).toBe('filter');
+      expect(control.dropDown.open).toBe(true);
+      expect(control.dropDown.currentItem).toBeNull();
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(modes(control)).toBe('dropdown');
+      expect(control.dropDown.open).toBe(true);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
+    it('1.36.2 the following ArrowDown moves on to the next visible Item', () => {
+      const control = setup();
+      control.selectionBox.filter.el.click();
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(modes(control)).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+  });
+
+  // requires: DropDown-mode SpaceBar toggling the Current Item while staying in
+  // DropDown mode with the DropDown open, and Enter committing (toggle +
+  // close + return to the previous mode)
+  describe('37. Keyboard - DropDown mode SpaceBar toggles, Enter commits and closes', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes.mode;
+    const open = (control) => {
+      control.selectionBox.filter.el.dispatchEvent({
+        type: 'keydown',
+        key: 'ArrowDown',
+        target: control.selectionBox.filter.el,
+        preventDefault() {},
+      });
+    };
+    const key = (control, keyName) => {
+      const prevented = { value: false };
+      control.selectionBox.filter.el.dispatchEvent({
+        type: 'keydown',
+        key: keyName,
+        target: control.selectionBox.filter.el,
+        preventDefault() {
+          prevented.value = true;
+        },
+      });
+      return prevented;
+    };
+
+    it('1.37.1 SpaceBar toggles the Current Item and stays in DropDown mode with the DropDown open', () => {
+      const control = setup();
+      open(control);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      const prevented = key(control, ' ');
+
+      expect(control.items[0].selected).toBe(true);
+      expect(control.selectionBox.items).toContain(control.items[0]);
+      expect(control.dropDown.open).toBe(true);
+      expect(modes(control)).toBe('dropdown');
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.37.2 SpaceBar again unselects the Current Item, still in DropDown mode', () => {
+      const control = setup();
+      open(control);
+      key(control, ' ');
+      key(control, ' ');
+
+      expect(control.items[0].selected).toBe(false);
+      expect(control.dropDown.open).toBe(true);
+      expect(modes(control)).toBe('dropdown');
+    });
+
+    it('1.37.3 SpaceBar keeps the Current Item marked Current', () => {
+      const control = setup();
+      open(control);
+      control.dropDown.setCurrent(control.items[1]);
+
+      key(control, ' ');
+
+      expect(control.items[1].selected).toBe(true);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.37.4 SpaceBar with no Current Item is consumed without selecting anything', () => {
+      const control = setup();
+      open(control);
+      control.dropDown.clearCurrent();
+
+      const prevented = key(control, ' ');
+
+      expect(control.selectionBox.items).toHaveLength(0);
+      expect(control.dropDown.open).toBe(true);
+      expect(modes(control)).toBe('dropdown');
+      expect(prevented.value).toBe(true);
+    });
+  });
+
+  // requires: the Item tree (group 1.1) and the DropDown items container
+  describe('38. Layout - per-level align configuration', () => {
+    const build = (options = {}) => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          {
+            label: 'Cities',
+            items: [
+              { value: 'paris', label: 'Paris' },
+              { value: 'london', label: 'London' },
+            ],
+          },
+        ],
+        options,
+      });
+    };
+    const isRow = (el) => el.classList.contains('cm-item__children--row');
+
+    it('1.38.1 align is keyed by the depth of the Items being laid out', () => {
+      const control = build({ align: { 1: 'row' } });
+
+      expect(control.items[1].depth).toBe(0);
+      expect(isRow(control.items[1].element)).toBe(true);
+      expect(control.dropDown.itemsEl.classList.contains('cm-items--row')).toBe(false);
+    });
+
+    it('1.38.2 the object form and the bare-string shorthand resolve identically', () => {
+      const control = build({ align: { 1: { flow: 'row' } } });
+
+      expect(control.items[1].childrenConfig).toEqual({ flow: 'row' });
+      expect(isRow(control.items[1].element)).toBe(true);
+    });
+
+    it('1.38.3 a level with no config lays out in a column', () => {
+      const control = build();
+
+      expect(control.items[1].childrenConfig).toEqual({ flow: 'column' });
+      expect(isRow(control.items[1].element)).toBe(false);
+    });
+
+    it('1.38.4 align: { 0: "row" } lays out the top-level Items in a row', () => {
+      const control = build({ align: { 0: 'row' } });
+
+      expect(control.dropDown.itemsEl.classList.contains('cm-items--row')).toBe(true);
+      expect(control.items[0].inRow).toBe(true);
+      expect(control.items[1].childrenConfig.flow).toBe('column');
+    });
+
+    it('1.38.5 levelConfig describes the level an Item stands in, childrenConfig the one below', () => {
+      const control = build({ align: { 1: { flow: 'row' } } });
+      const cities = control.items[1];
+
+      expect(cities[0].depth).toBe(1);
+      expect(cities.levelConfig).toEqual({ flow: 'column' });
+      expect(cities.childrenConfig).toEqual({ flow: 'row' });
+      expect(cities.inRow).toBe(false);
+      expect(cities[0].inRow).toBe(true);
+    });
+
+    it('1.38.7 an unrecognised flow value falls back to a column', () => {
+      const control = build({ align: { 1: { flow: 'diagonal' } } });
+
+      expect(control.items[1].childrenConfig.flow).toBe('column');
+      expect(isRow(control.items[1].element)).toBe(false);
+    });
+
+  });
+
+  // requires: structural Item movement (group 40): arrow keys answer from where
+  // the Current Item sits. The walk is one document-order walk; alignment only
+  // picks which keys drive it, so a row level is walked with ArrowLeft/ArrowRight
+  // and a column level with ArrowUp/ArrowDown
+  describe('39. Keyboard - structural navigation over groups and rows', () => {
+    const ITEM_SPECS = [
+      { value: 'alpha', label: 'Alpha' },
+      { value: 'beta', label: 'Beta', selectable: 'false' },
+      { value: 'kappa', label: 'Kappa' },
+      {
+        label: 'Cities',
+        items: [
+          { value: 'paris', label: 'Paris' },
+          { value: 'london', label: 'London' },
+          { value: 'new-york', label: 'New-York' },
+        ],
+      },
+      {
+        value: 'sandwich',
+        label: 'Sandwich',
+        items: [
+          { value: 'tuna', label: 'Tuna' },
+          { value: 'vegetables', label: 'Vegetables' },
+          { value: 'egg', label: 'Egg' },
+        ],
+      },
+    ];
+    const build = (options = {}) => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, { items: ITEM_SPECS, options });
+      const [alpha, , kappa, cities, sandwich] = control.items;
+      return {
+        control,
+        alpha,
+        kappa,
+        cities,
+        sandwich,
+        paris: cities[0],
+        london: cities[1],
+        newYork: cities[2],
+      };
+    };
+    /** Cities' children are a row that ArrowDown never descends into. */
+    const rowSetup = () => build({ align: { 1: { flow: 'row' } } });
+    /** A row level made of Groups, with a Group holding a row of its own. */
+    const nestedSetup = () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          {
+            label: 'Select All',
+            items: [
+              {
+                label: 'Level 2',
+                items: [
+                  { value: 'l2.1', label: 'Level 2.1' },
+                  {
+                    label: 'Level 2.4',
+                    items: [
+                      { value: 'l2.4.1', label: 'Level 2.4.1' },
+                      { value: 'l2.4.2', label: 'Level 2.4.2' },
+                    ],
+                  },
+                  { value: 'l2.5', label: 'Level 2.5' },
+                ],
+              },
+              { label: 'Level 3', items: [{ value: 'l3.1', label: 'Level 3.1' }] },
+            ],
+          },
+        ],
+        options: { align: { 1: { flow: 'row' }, 3: 'row' } },
+      });
+      const [selectAll] = control.items;
+      const [level2, level3] = selectAll;
+      const [l21, l24, l25] = level2;
+      return {
+        control,
+        selectAll,
+        level2,
+        level3,
+        l21,
+        l24,
+        l25,
+        l241: l24[0],
+        l242: l24[1],
+      };
+    };
+    const key = (control, keyName) => {
+      const prevented = { value: false };
+      control.selectionBox.filter.el.dispatchEvent({
+        type: 'keydown',
+        key: keyName,
+        target: control.selectionBox.filter.el,
+        preventDefault() {
+          prevented.value = true;
+        },
+      });
+      return prevented;
+    };
+    const open = (control) => key(control, 'ArrowDown');
+    const current = (control) => control.dropDown.currentItem;
+
+    it('1.39.1 ArrowDown into the DropDown marks the first navigable top-level Item Current', () => {
+      const { control, alpha, kappa } = rowSetup();
+
+      open(control);
+
+      expect(current(control)).toBe(alpha);
+      expect(current(control)).not.toBe(kappa);
+    });
+
+    it('1.39.2 ArrowDown skips a non-toggleable Item', () => {
+      const { control, alpha, kappa } = rowSetup();
+      open(control);
+      expect(current(control)).toBe(alpha);
+
+      key(control, 'ArrowDown');
+
+      expect(current(control)).toBe(kappa);
+    });
+
+    it('1.39.3 ArrowDown marks a Group Item Current', () => {
+      const { control, kappa, cities } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(kappa);
+
+      key(control, 'ArrowDown');
+
+      expect(current(control)).toBe(cities);
+    });
+
+    it('1.39.4 ArrowDown on a Group enters it even when the level below is a row', () => {
+      const { control, cities, sandwich, paris } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(cities);
+
+      const prevented = key(control, 'ArrowDown');
+
+      expect(current(control)).toBe(paris);
+      expect(current(control)).not.toBe(sandwich);
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.39.5 the last Item of the tree keeps the marker and is still consumed', () => {
+      const { control, sandwich } = rowSetup();
+      open(control);
+      const last = sandwich[sandwich.length - 1];
+      control.dropDown.setCurrent(last);
+
+      const prevented = key(control, 'ArrowRight');
+
+      expect(current(control)).toBe(last);
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.39.6 ArrowRight on a top-level Item has no level to leave and is a consumed no-op', () => {
+      const { control, cities, sandwich } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(cities);
+
+      const prevented = key(control, 'ArrowRight');
+
+      expect(current(control)).toBe(cities);
+      expect(current(control)).not.toBe(sandwich);
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.39.7 ArrowRight and ArrowLeft walk a row level and leave it at its edges', () => {
+      const { control, kappa, cities, paris, london, newYork, sandwich } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(paris);
+
+      expect(key(control, 'ArrowRight').value).toBe(true);
+      expect(current(control)).toBe(london);
+      key(control, 'ArrowRight');
+      expect(current(control)).toBe(newYork);
+
+      // The right edge of a row is not a wall: the walk carries on out of it.
+      const atRightEdge = key(control, 'ArrowRight');
+      expect(current(control)).toBe(sandwich);
+      expect(atRightEdge.value).toBe(true);
+
+      // Sandwich sits on the column level above, where ArrowUp is the backward
+      // key and ArrowLeft the outward one, which has no parent to go to.
+      key(control, 'ArrowUp');
+      expect(current(control)).toBe(cities);
+      key(control, 'ArrowUp');
+      expect(current(control)).toBe(kappa);
+
+      expect(control.items[3]).toBe(cities);
+    });
+
+    it('1.39.8 ArrowUp from a row Item goes to the parent Group', () => {
+      const { control, cities, london } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(london);
+
+      key(control, 'ArrowUp');
+
+      expect(current(control)).toBe(cities);
+    });
+
+    it('1.39.9 ArrowRight on the last Item of a row leaves the level for the parent next sibling', () => {
+      const { control, sandwich, newYork } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(newYork);
+
+      const prevented = key(control, 'ArrowRight');
+
+      expect(current(control)).toBe(sandwich);
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.39.10 Home and End move within the row the marker stands in', () => {
+      const { control, paris, newYork } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(paris);
+
+      key(control, 'End');
+      expect(current(control)).toBe(newYork);
+
+      key(control, 'Home');
+      expect(current(control)).toBe(paris);
+    });
+
+    it('1.39.11 Home and End on a top-level Item move within the top level', () => {
+      const { control, alpha, sandwich } = rowSetup();
+      open(control);
+
+      key(control, 'End');
+      expect(current(control)).toBe(sandwich);
+
+      key(control, 'Home');
+      expect(current(control)).toBe(alpha);
+    });
+
+    it('1.39.12 ArrowDown descends into a Group when its level does not skip children', () => {
+      const { control, cities, paris } = build({ align: { 1: 'row' } });
+      open(control);
+      control.dropDown.setCurrent(cities);
+
+      key(control, 'ArrowDown');
+
+      expect(current(control)).toBe(paris);
+    });
+
+    it('1.39.13 a filtered-out row sibling is skipped', () => {
+      const { control, paris, london, newYork } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(paris);
+      london.visible = false;
+
+      key(control, 'ArrowRight');
+
+      expect(current(control)).toBe(newYork);
+    });
+
+    it('1.39.14 SpaceBar on a Group toggles every child of its row', () => {
+      const { control, cities, paris, london, newYork } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(cities);
+
+      key(control, ' ');
+
+      expect([paris, london, newYork].map((item) => item.selected)).toEqual([true, true, true]);
+      expect(control.dropDown.open).toBe(true);
+    });
+
+    it('1.39.15 Enter on a Group toggles it, closes the DropDown and returns to Filter mode', () => {
+      const { control, cities, sandwich } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(cities);
+
+      key(control, 'Enter');
+
+      expect(cities.selectionState).toBe('all');
+      expect(sandwich[0].selected).toBe(false);
+      expect(control.dropDown.open).toBe(false);
+      expect(control[MSELECT_INTERNALS].modes.mode).toBe('filter');
+    });
+
+    it('1.39.16 ArrowLeft on the first Item of a row is the parent, not a wall', () => {
+      const { control, cities, paris } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(paris);
+
+      const prevented = key(control, 'ArrowLeft');
+
+      expect(current(control)).toBe(cities);
+      expect(current(control)).not.toBe(paris);
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.39.17 ArrowLeft on a top-level Group is consumed and keeps the marker', () => {
+      const { control, cities } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(cities);
+
+      const prevented = key(control, 'ArrowLeft');
+
+      expect(current(control)).toBe(cities);
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.39.18 ArrowLeft and ArrowRight with no Current Item are not consumed', () => {
+      const { control } = rowSetup();
+      open(control);
+      control.dropDown.clearCurrent();
+
+      expect(key(control, 'ArrowRight').value).toBe(false);
+      expect(key(control, 'ArrowLeft').value).toBe(false);
+      expect(current(control)).toBe(null);
+    });
+
+    it('1.39.19 every Item of a row level is reachable along the row own axis', () => {
+      const { control, selectAll, level2, level3, l21 } = nestedSetup();
+      open(control);
+      control.dropDown.setCurrent(selectAll);
+
+      key(control, 'ArrowDown');
+      expect(current(control)).toBe(level2);
+      key(control, 'ArrowRight');
+      expect(current(control)).toBe(level3);
+      key(control, 'ArrowLeft');
+      expect(current(control)).toBe(level2);
+      // Walking back off the front of the row lands on its parent.
+      key(control, 'ArrowLeft');
+      expect(current(control)).toBe(selectAll);
+      key(control, 'ArrowDown');
+      expect(current(control)).toBe(level2);
+      // and the key across the row axis is the one that opens a Group.
+      key(control, 'ArrowDown');
+      expect(current(control)).toBe(l21);
+    });
+
+    it('1.39.20 ArrowRight on a Group of a row level steps along the row instead of opening it', () => {
+      const { control, level2, level3, l21 } = nestedSetup();
+      open(control);
+      control.dropDown.setCurrent(level2);
+      expect(level2.inRow).toBe(true);
+
+      key(control, 'ArrowRight');
+
+      expect(current(control)).toBe(level3);
+      expect(current(control)).not.toBe(l21);
+    });
+
+    it('1.39.21 ArrowDown is the key that opens a Group standing in a row', () => {
+      const { control, level2, l21 } = nestedSetup();
+      open(control);
+      control.dropDown.setCurrent(level2);
+
+      expect(key(control, 'ArrowDown').value).toBe(true);
+      expect(current(control)).toBe(l21);
+
+      // A leaf standing in a row has nothing to open, so it only consumes the key.
+      const { control: other, cities: group, paris: leaf } = rowSetup();
+      open(other);
+      other.dropDown.setCurrent(leaf);
+      expect(key(other, 'ArrowDown').value).toBe(true);
+      expect(other.dropDown.currentItem).toBe(leaf);
+      expect(other.dropDown.currentItem).not.toBe(group);
+    });
+
+    it('1.39.22 ArrowLeft on the first Group of a row level is its parent', () => {
+      const { control, selectAll, level2, l21 } = nestedSetup();
+      open(control);
+      control.dropDown.setCurrent(level2);
+
+      const prevented = key(control, 'ArrowLeft');
+
+      expect(current(control)).toBe(selectAll);
+      expect(current(control)).not.toBe(level2);
+      expect(current(control)).not.toBe(l21);
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.39.23 ArrowUp lands on the previous Group itself, not on its first child', () => {
+      const { control, l25, l241, l242, l24 } = nestedSetup();
+      open(control);
+      control.dropDown.setCurrent(l25);
+
+      key(control, 'ArrowUp');
+
+      expect(current(control)).toBe(l24);
+      expect(current(control)).not.toBe(l241);
+      expect(current(control)).not.toBe(l242);
+    });
+
+    it('1.39.24 ArrowUp stops at a previous sibling whose level skips children', () => {
+      const { control, cities, sandwich } = rowSetup();
+      open(control);
+      control.dropDown.setCurrent(sandwich);
+
+      key(control, 'ArrowUp');
+
+      expect(current(control)).toBe(cities);
+    });
+
+  });
+
+  // requires: the per-level align configuration (group 38). The walk answers
+  // from an Item's own placement in the tree; flow only selects the arrow axis
+  describe('40. Item structural movement', () => {
+    const build = (options = {}) => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          { value: 'alpha', label: 'Alpha' },
+          { value: 'beta', label: 'Beta', selectable: 'false' },
+          { value: 'kappa', label: 'Kappa' },
+          {
+            label: 'Cities',
+            items: [
+              { value: 'paris', label: 'Paris' },
+              { value: 'london', label: 'London' },
+              { value: 'new-york', label: 'New-York' },
+            ],
+          },
+          {
+            value: 'sandwich',
+            label: 'Sandwich',
+            items: [{ value: 'tuna', label: 'Tuna' }],
+          },
+        ],
+        options,
+      });
+      const [alpha, beta, kappa, cities, sandwich] = control.items;
+      return {
+        alpha,
+        beta,
+        kappa,
+        cities,
+        sandwich,
+        paris: cities[0],
+        london: cities[1],
+        newYork: cities[2],
+        tuna: sandwich[0],
+      };
+    };
+    const rowSetup = () => build({ align: { 1: { flow: 'row' } } });
+    /** A row level made of Groups, to tell a row member from an entrance. */
+    const nestedRow = () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          {
+            label: 'Select All',
+            items: [
+              {
+                label: 'Level 2',
+                items: [
+                  { value: 'l2.1', label: 'Level 2.1' },
+                  { value: 'l2.5', label: 'Level 2.5' },
+                ],
+              },
+              { label: 'Level 3', items: [{ value: 'l3.1', label: 'Level 3.1' }] },
+            ],
+          },
+        ],
+        options: { align: { 1: 'row' } },
+      });
+      const [selectAll] = control.items;
+      const [level2, level3] = selectAll;
+      return { selectAll, level2, level3, l21: level2[0], l25: level2[1] };
+    };
+    it('1.40.1 navigable excludes hidden and non-toggleable Items but keeps Groups', () => {
+      const { alpha, beta, cities, london } = build();
+
+      expect(alpha.navigable).toBe(true);
+      expect(beta.navigable).toBe(false);
+      expect(cities.navigable).toBe(true);
+      london.visible = false;
+      expect(london.navigable).toBe(false);
+    });
+
+    it('1.40.2 an Item iterates its own children, and its parent is the level it steps along', () => {
+      const { alpha, beta, kappa, cities, sandwich, paris, london, newYork } = build();
+
+      expect([...cities]).toEqual([paris, london, newYork]);
+      expect([...paris]).toEqual([]);
+      expect([...kappa.parent]).toEqual([alpha, beta, kappa, cities, sandwich]);
+      expect([...paris.parent]).toEqual([paris, london, newYork]);
+    });
+
+    it('1.40.3 next steps over a non-selectable Item to the next sibling', () => {
+      const { alpha, kappa, cities } = build();
+
+      expect(alpha.next()).toBe(kappa);
+      expect(kappa.next()).toBe(cities);
+    });
+
+    it('1.40.4 next descends into a Group at its first navigable child', () => {
+      const { cities, sandwich, paris, tuna } = build();
+
+      expect(cities.next()).toBe(paris);
+      expect(sandwich.next()).toBe(tuna);
+    });
+
+    it('1.40.5 next leaves a finished subtree for the closest ancestor with a next sibling', () => {
+      const { newYork, sandwich, tuna } = build();
+
+      expect(newYork.next()).toBe(sandwich);
+      expect(tuna.next()).toBeNull();
+    });
+
+    it('1.40.6 next is the same walk whatever the level is laid out as', () => {
+      const column = build();
+      const row = rowSetup();
+
+      // The walk is decided per Item, so alignment cannot redirect it.
+      for (const [a, b] of [[column, row]]) {
+        expect(a.cities.next()).toBe(a.paris);
+        expect(a.paris.next()).toBe(a.london);
+        expect(a.newYork.next()).toBe(a.sandwich);
+        expect(a.tuna.next()).toBeNull();
+      }
+    });
+
+    it('1.40.7 next returns null past the last Item of the tree', () => {
+      const { newYork, sandwich, tuna } = build();
+
+      expect(tuna.next()).toBeNull();
+      expect(sandwich.next()).toBe(tuna);
+      expect(newYork.next()).toBe(sandwich);
+    });
+
+    it('1.40.8 previous steps back to the previous sibling', () => {
+      const { alpha, kappa, cities, paris, london } = build();
+
+      expect(kappa.previous()).toBe(alpha);
+      expect(cities.previous()).toBe(kappa);
+      expect(london.previous()).toBe(paris);
+    });
+
+    it('1.40.9 previous from the first Item of a level is its parent, and null at the top', () => {
+      const { alpha, cities, paris } = build();
+
+      expect(paris.previous()).toBe(cities);
+      expect(alpha.previous()).toBeNull();
+    });
+
+    it('1.40.10 previous never descends, so the two walks are deliberately not mirrors', () => {
+      const { kappa, cities, paris, newYork, sandwich } = build();
+
+      // next steps into the Group, previous climbs straight back out of it.
+      expect(cities.next()).toBe(paris);
+      expect(paris.previous()).toBe(cities);
+
+      // A level boundary is reached from one side and left from the other.
+      expect(newYork.next()).toBe(sandwich);
+      expect(sandwich.previous()).toBe(cities);
+      expect(sandwich.previous()).not.toBe(newYork);
+      expect(kappa.next()).toBe(cities);
+    });
+
+    it('1.40.11 parentNext steps over the Item own subtree to its parent next sibling', () => {
+      const { kappa, cities, sandwich, paris, newYork, tuna } = build();
+
+      expect(paris.parentNext()).toBe(sandwich);
+      expect(newYork.parentNext()).toBe(sandwich);
+      expect(kappa.parentNext()).toBeNull();
+      expect(tuna.parentNext()).toBeNull();
+    });
+
+    it('1.40.12 parentNext is null with no parent to step out of', () => {
+      const { alpha, cities } = build();
+
+      expect(alpha.parentItem).toBeNull();
+      expect(alpha.parentNext()).toBeNull();
+      expect(cities.parentItem).toBeNull();
+    });
+
+    it('1.40.13 parentItem names the enclosing Item and stops at the top level', () => {
+      const { cities, paris } = build();
+
+      expect(paris.parentItem).toBe(cities);
+      expect(cities.parentItem).toBeNull();
+    });
+
+    it('1.40.14 the walk starts from an Item that has itself left the visible list', () => {
+      const { cities, paris, kappa, sandwich } = build();
+
+      // A Group whose own value was unselected loses its children too, so the
+      // walk starts from an Item that is itself no longer navigable.
+      for (const item of [cities, ...cities]) item.visible = false;
+
+      expect(cities.navigable).toBe(false);
+      expect(cities.navigableChildren).toEqual([]);
+      expect(cities.next()).toBe(sandwich);
+      expect(cities.previous()).toBe(kappa);
+      expect(paris.next()).toBe(sandwich);
+    });
+
+    it('1.40.16 nextInLevel steps over the Item own subtree where next descends into it', () => {
+      const { cities, sandwich, paris, london, newYork } = build();
+
+      expect(cities.nextInLevel()).toBe(sandwich);
+      expect(cities.next()).toBe(paris);
+      expect(paris.nextInLevel()).toBe(london);
+      expect(newYork.nextInLevel()).toBe(sandwich);
+    });
+
+    it('1.40.17 descend opens a Group at its first navigable child, and is null for a leaf', () => {
+      const { cities, sandwich, paris, london, newYork, tuna, alpha } = build();
+
+      expect(cities.descend()).toBe(paris);
+      expect(sandwich.descend()).toBe(tuna);
+      expect(paris.descend()).toBeNull();
+      expect(alpha.descend()).toBeNull();
+
+      paris.visible = false;
+      expect(cities.descend()).toBe(london);
+      london.visible = false;
+      expect(cities.descend()).toBe(newYork);
+      newYork.visible = false;
+      expect(cities.descend()).toBeNull();
+    });
+
+    it('1.40.15 next and previous only ever return rendered, toggleable Items', () => {
+      const { cities, paris, london, newYork, kappa } = build();
+      london.visible = false;
+
+      expect(paris.next()).toBe(newYork);
+      expect(paris.previous()).toBe(cities);
+      expect(cities.previous()).toBe(kappa);
     });
   });
 });

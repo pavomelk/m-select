@@ -20,6 +20,15 @@ host.style.margin = '24px 0';
 const state = document.createElement('pre');
 state.textContent = 'selected values: []';
 
+const neighbor = document.createElement('div');
+neighbor.style.margin = '12px 0';
+const neighborLabel = document.createElement('label');
+neighborLabel.textContent = 'Focus target next to the control: ';
+const neighborInput = document.createElement('input');
+neighborInput.type = 'text';
+neighborInput.placeholder = 'Tab or click here to leave the control';
+neighbor.append(neighborLabel, neighborInput);
+
 app.append(heading, intro, host);
 
 const control = new MSelect(host, inputExample);
@@ -31,7 +40,7 @@ const timer = setInterval(reflect, 100);
 window.addEventListener('beforeunload', () => clearInterval(timer));
 reflect();
 
-app.append(state);
+app.append(state, neighbor);
 window.control = control;
 
 

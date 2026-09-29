@@ -67,8 +67,27 @@ export const inputExample = {
         */
         chipPlaceOrder: 'asPicked',
         logLevel: 'silent',
-        /** Maps a children-container depth (0-based) to 'row' or 'column'. Defaults to 'column'. */
-		align: { //items at level 3 in the hierarchy should be positioned horizontally
+        /**
+         * Layout of a hierarchy level, keyed by the depth of the *Items* it holds
+         * (0 = top level), so `1` describes the children of the top-level Items.
+         * An entry is either the shorthand 'row'/'column' or an object
+         * `{ flow }`.
+         *
+         * This is presentation only. The list is navigated as one structural walk
+         * in document order, and `flow` just decides which arrow keys drive the
+         * level: a column is walked with ArrowUp/ArrowDown and a row with
+         * ArrowLeft/ArrowRight, the other two leaving the level for its parent.
+         * Defaults: flow 'column'.
+         *
+         * A Group on a row level is a row member rather than an entrance:
+         * ArrowRight/ArrowLeft walk the row - off its front end onto the parent,
+         * off its back end onto the parent's next sibling - ArrowDown opens it,
+         * and ArrowUp goes to the parent.
+         */
+        align: {
+			// the children of every top-level Group (Cities, Sandwich, Select All)
+			// are a row; level 3 keeps its own row as well
+			1: { flow: 'row' },
 			3: 'row'
 		},
         groupItems: {

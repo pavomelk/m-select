@@ -55,6 +55,27 @@ export class Logger {
 const normalizeBool = (value) => value !== false && String(value) !== 'false';
 
 /**
+ * Resolves the layout of a single hierarchy level out of the `align` option.
+ * Levels are keyed by the depth of the Items they hold (0 = the top-level ones),
+ * so `align: { 1: 'row' }` lays out the children of a top-level Group
+ * horizontally. An entry is either the shorthand `'row'`/`'column'` or an object
+ * `{ flow }`.
+ *
+ * Layout is presentation. It picks which arrow keys walk the level (see
+ * `Item#inRow` and `REQ-3.11-14.1`) and nothing else: no setting here can make
+ * an Item unreachable, turn a real move into a no-op, or redirect the walk,
+ * because the walk is decided per Item by `Item#next`/`Item#previous`.
+ * @param {object} [options] component options
+ * @param {number} depth depth of the Items the level holds
+ * @returns {{flow: 'row'|'column'}}
+ */
+const levelConfig = (options, depth) => {
+  const entry = (options && options.align && options.align[depth]) || {};
+  const config = typeof entry === 'string' ? { flow: entry } : entry;
+  return { flow: config.flow === 'row' ? 'row' : 'column' };
+};
+
+/**
  * The root of an option tree. It is a separate Array-like object used as the
  * parent of every top-level Item and offers the same owner interface an Item
  * does: `element` (where the top-level `itemView`s attach), `depth = -1` (so
@@ -70,7 +91,6 @@ export class RootContainer {
   constructor(element) {
     this.depth = -1;
     this.isRoot = true;
-    this.hasParent = false;
     // Sentinel "parent": an empty array can never be a real parent — a real
     // parent holds its children, so it has `length >= 1`.
     this.parent = Object.freeze([]);
@@ -200,9 +220,6 @@ export class Item {
 
     this.element = document.createElement('div');
     this.element.className = 'cm-item__children';
-    if ((options.align || {})[this.depth] === 'row') {
-      this.element.classList.add('cm-item__children--row');
-    }
 
     this.#adopt((spec.items || []).map((child) => new Item(child, options, 0, this)));
     this.#createDOM();
@@ -355,6 +372,164 @@ export class Item {
     return siblings[siblings.length - 1];
   }
 
+  /**
+   * Resolved layout configuration of the level this Item belongs to (its own
+   * depth): how the Items around it are laid out and whether ArrowDown enters
+   * their children. DOM and keyboard navigation read the same config, so the
+   * marker always follows the structure the user actually sees.
+   * @returns {{flow: 'row'|'column'}}
+   */
+  get levelConfig() {
+    return levelConfig(this.options, this.depth);
+  }
+
+  /**
+   * Resolved layout configuration of the level holding this Item's own children
+   * (depth + 1), i.e. the level this Item's `element` renders. `options.align`
+   * is keyed by the depth of the Items being laid out, so with
+   * `align: { 1: 'row' }` a top-level Group renders its children in a row.
+   * @returns {{flow: 'row'|'column'}}
+   */
+  get childrenConfig() {
+    return levelConfig(this.options, this.depth + 1);
+  }
+
+  /** @returns {boolean} whether this Item's level is laid out horizontally. */
+  get inRow() {
+    return this.levelConfig.flow === 'row';
+  }
+
+  /**
+   * Whether keyboard navigation can stand on this Item: it must be rendered and
+   * togglable. A Group Item qualifies (its own selection is an indicator),
+   * while a non-toggleable leaf does not.
+   * @returns {boolean}
+   */
+  get navigable() {
+    return this.visible && this.isSelectable;
+  }
+
+  /**
+   * The direct children ArrowDown can descend into: the rendered, togglable
+   * ones, in tree order.
+   * @returns {Item[]}
+   */
+  get navigableChildren() {
+    return [...this].filter((child) => child.navigable);
+  }
+
+  /**
+   * The Items sharing this Item's container that navigation can stand on — its
+   * siblings, or the top-level Items for a root one. Home/End and the page steps
+   * walk this list, keeping the marker on the line it currently occupies.
+   * @returns {Item[]}
+   */
+  get navigableSiblings() {
+    return [...this.parent].filter((item) => item.navigable);
+  }
+
+  /**
+   * The enclosing Item, or `null` at the top level. Every top-level Item's parent
+   * is the `RootContainer`, which is not an Item and must never be marked
+   * Current — the single place that fact is decided, so the root cannot be
+   * entered by any movement.
+   * @returns {Item|null}
+   */
+  get parentItem() {
+    return this.parent instanceof Item ? this.parent : null;
+  }
+
+  /**
+   * The next navigable Item of this Item's own level, or `null` when there is
+   * none after it. Scans the unfiltered siblings outward rather than asking
+   * where this Item sits among the navigable ones, so the walk still works when
+   * it starts from an Item that has just left the list itself.
+   * @private
+   * @returns {Item|null}
+   */
+  #nextSibling() {
+    const siblings = [...this.parent];
+    const index = siblings.indexOf(this);
+    for (let i = index + 1; i >= 0 && i < siblings.length; i += 1) {
+      if (siblings[i].navigable) return siblings[i];
+    }
+    return null;
+  }
+
+  /**
+   * The Item after this one in document order: the first navigable child of a
+   * Group Item, otherwise its next sibling, bubbling out of a finished subtree
+   * to the closest ancestor that still has one. Past the last Item in the tree
+   * there is no next, and `null` is returned.
+   *
+   * Pure structure — every hop is decided by what is rendered and togglable, so
+   * filtered-out and non-selectable Items are stepped over while Group Items
+   * stay part of the walk. How the level is laid out is not consulted, which is
+   * what lets an Item leave a level here and be found by the walk, whichever key
+   * drives it.
+   * @returns {Item|null}
+   */
+  next() {
+    return this.descend() ?? this.nextInLevel();
+  }
+
+  /**
+   * The next Item of the walk with this Item's own subtree stepped over: its
+   * next sibling, or the closest ancestor that still has one. This is what the
+   * forward key does on a row level - the row is walked along its own axis, so
+   * a Group standing in it is a member of the row and not an entrance - and
+   * reaching the end of the row carries the walk out of it with no rule of its
+   * own. `null` past the last Item of the tree.
+   * @returns {Item|null}
+   */
+  nextInLevel() {
+    for (let item = this; item; item = item.parentItem) {
+      const sibling = item.#nextSibling();
+      if (sibling) return sibling;
+    }
+    return null;
+  }
+
+  /**
+   * The first navigable child of this Group Item, or `null` when it has none.
+   * On a row level the children sit off the row's own axis, so opening a Group
+   * there is the job of the key across that axis rather than of the forward one.
+   * @returns {Item|null}
+   */
+  descend() {
+    const children = this.navigableChildren;
+    return this.isGroup && children.length > 0 ? children[0] : null;
+  }
+
+  /**
+   * The Item before this one in document order: its previous sibling, or the
+   * parent when it is the first of its level. It never descends into a Group the
+   * way `next()` does, so the two are deliberately not mirrors - a level is
+   * stepped into from its parent and climbed out of to it. At the top level
+   * there is no parent to fall back to, and `null` is returned.
+   * @returns {Item|null}
+   */
+  previous() {
+    const siblings = [...this.parent];
+    const index = siblings.indexOf(this);
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (siblings[i].navigable) return siblings[i];
+    }
+    return this.parentItem;
+  }
+
+  /**
+   * The Item after the level this Item stands on, stepping over whatever is left
+   * of its own subtree: the next sibling of its closest enclosing Item. This is
+   * the one movement a Group's subtree can hide, and the only way to leave a
+   * level that is not an edge of it. `null` at the top level, and past the last
+   * Item in the tree.
+   * @returns {Item|null}
+   */
+  parentNext() {
+    return this.parentItem ? this.parentItem.nextInLevel() : null;
+  }
+
   get selectableCount() {
     if (!this.isGroup) {
       return this.isSelectable ? 1 : 0;
@@ -385,6 +560,19 @@ export class Item {
     if (picked === 0) return 'none';
     if (picked === total) return 'all';
     return 'partial';
+  }
+
+  /**
+   * Whether this Item belongs to the current selection, and so to a
+   * selected-Items-only list. A Group qualifies through what it holds rather
+   * than through its own `selected` flag: that flag is set when the Group is
+   * toggled as a whole and then survives unselecting its children one by one, so
+   * asking it alone would keep an emptied Group in the list. A Group carrying a
+   * value is its own Chip, so it qualifies on its flag even with no children.
+   */
+  get inSelection() {
+    if (!this.isGroup) return this.selected;
+    return this.selectedCount > 0 || (this.selected && this.value !== undefined);
   }
 
   /** Depth-first flattening of this Item's children (and their descendants). */
@@ -451,11 +639,13 @@ export class Item {
   }
 
   /**
-   * Builds this Item's DOM parts — the Item view (`itemView`) and the Chip view
-   * (`chipView`) — without considering the running state (selection, visibility,
-   * focus). State-dependent classes and content are applied by `syncView()`.
-   * For Group Items it creates only the children container; the rendering of
-   * the children is delegated to the child Items (each renders its own `itemView`).
+   * Builds this Item's Item view (`itemView`) without considering the running
+   * state (selection, visibility, focus); those are applied by `syncView()`. The
+   * Chip view (`chipView`) is deliberately not built here — it is created on
+   * demand by `buildChipView()`, so an Item that never shows an individual Chip
+   * allocates none. For Group Items the Item view holds only the children
+   * container; the rendering of the children is delegated to the child Items
+   * (each renders its own `itemView`).
    */
   #createDOM() {
     const li = document.createElement('div');
@@ -543,6 +733,7 @@ export class Item {
    * created DOM parts (`itemView`, `chipView`). Called after `#createDOM()`.
    */
   syncView() {
+    this.element.classList.toggle('cm-item__children--row', this.childrenConfig.flow === 'row');
     const li = this.itemView;
     if (!li) return;
 
@@ -601,8 +792,19 @@ export class Filter {
 
   set displaySelected(value) {
     this.#displaySelected = Boolean(value);
+    this.refilter();
+  }
+
+  /**
+   * Re-applies the current restriction: the selected-Items-only one while
+   * `displaySelected` is on, the text query otherwise. Assigning
+   * `displaySelected` uses this, and a selection change calls it too, so an
+   * Item that just lost its selection leaves the visible list instead of
+   * lingering there until the next filter run.
+   */
+  refilter() {
     if (this.#displaySelected) {
-      this.control.dropDown.filter('', (item) => item.selected);
+      this.control.dropDown.filter('', (item) => item.inSelection);
     } else {
       this.control.dropDown.filter(this.query);
     }
@@ -635,6 +837,25 @@ export class Filter {
     this.#debounceTimer = setTimeout(() => {
       this.control.dropDown.filter(this.query);
     }, this.debounceDelay);
+  }
+
+  /**
+   * Single owner of the input's typing DOM state: toggles the caret's
+   * editability (read-only) and, when requested, moves the system focus. Mode
+   * transitions and the outside-click handler go through here so caret/blur
+   * handling never drifts apart. Only the fields given are touched; omitted
+   * fields leave that aspect of the DOM state as-is.
+   * @param {{editable?: boolean, focused?: boolean}} state
+   */
+  setCaretState({ editable, focused } = {}) {
+    if (editable !== undefined) {
+      this.el.readOnly = !editable;
+    }
+    if (focused === true && this.el !== document.activeElement) {
+      this.el.focus();
+    } else if (focused === false) {
+      this.el.blur();
+    }
   }
 }
 
@@ -694,8 +915,6 @@ class SelectionBox {
     this.collapsedChip =
       this.control.options.maxVisibleChips != null ? new CollapsedChip() : null;
 
-    this.keepCollapsed = false;
-
     this.el.append(this.chipsEl, this.filter.el, this.clearBtn);
   }
 
@@ -704,8 +923,10 @@ class SelectionBox {
 
   /**
    * Whether the selection is currently shown as a CollapsedChip. Maintained by
-   * add()/remove()/render(); with `keepCollapsed`, an achieved collapse is held
-   * until the last Item is removed.
+   * add()/remove()/render(). The count alone decides, except while the
+   * interaction is anchored on the Collapsed chip — Collapsed mode, or the
+   * DropDown entered from it — where an achieved collapse is held until the
+   * last Item is unselected; see MSelect#holdsCollapse.
    */
   get isCollapsed() {
     return this.#collapsed;
@@ -720,7 +941,8 @@ class SelectionBox {
       return;
     }
     const count = this.control.selectedItems.length;
-    this.#collapsed = count > max || (this.#collapsed && this.keepCollapsed && count > 0);
+    this.#collapsed =
+      count > max || (this.#collapsed && count > 0 && this.control.holdsCollapse);
   }
 
   /**
@@ -789,7 +1011,12 @@ class SelectionBox {
       this.chipsEl.removeChild(item.chipView);
     }
 
-    if (this.control.dropDown.currentItem === item) {
+    // Only a chip that was actually in the box vacates a slot to hand over.
+    // A Group carrying no value is never added, so removing one (it is
+    // unselected as a whole along with its children) leaves itemIndex at -1,
+    // which would ask for a successor at position -1 and drop the marker even
+    // though other chips are still there.
+    if (itemIndex >= 0 && this.control.dropDown.currentItem === item) {
       this.#promoteSuccessor(itemIndex);
     }
   }
@@ -797,8 +1024,9 @@ class SelectionBox {
   /**
    * After removing the Current chip, hands "Current" to the chip that occupies
    * the vacated slot (the one that slides in from its right; the previous chip
-   * when the removed one was last). Same rule in LTR and RTL flow. Clears the
-   * marker when no chip remains.
+   * when the removed one was last). Same rule in LTR and RTL flow. With no chip
+   * left there is nobody to hand over to, so the marker stays on the Item that
+   * was just unselected rather than being dropped.
    * @private
    * @param {number} removedIndex position the removed chip held among `items`
    */
@@ -808,8 +1036,6 @@ class SelectionBox {
       this.control.dropDown.setCurrent(remaining[removedIndex]);
     } else if (remaining.length > 0) {
       this.control.dropDown.setCurrent(remaining[remaining.length - 1]);
-    } else {
-      this.control.dropDown.clearCurrent();
     }
   }
 
@@ -830,7 +1056,6 @@ class SelectionBox {
     this.items = [];
     this.chips = [];
     this.collapsedChip = null;
-    this.keepCollapsed = false;
   }
 
   /** The Items currently shown as chips, in the order they are placed. */
@@ -898,6 +1123,7 @@ class DropDown {
 
     this.itemsEl = document.createElement('div');
     this.itemsEl.className = 'cm-items';
+    this.itemsEl.classList.toggle('cm-items--row', levelConfig(options, 0).flow === 'row');
     this.el.append(this.toolbarEl, this.itemsEl);
 
     this.items = Item.root(itemsSpecs || [], options, this.itemsEl);
@@ -962,23 +1188,30 @@ class DropDown {
   }
 
   /**
-   * Shows the DropDown.
+   * Whether the DropDown is currently visible. Reads return the open state;
+   * assigning a boolean shows (open) or hides (close) it. Opening also brings
+   * the Current Item into view, fires `cm-dropdown-open`/`cm-dropdown-close`
+   * and triggers the one-shot Items request while the component is empty.
+   * @param {boolean} [value]
+   * @returns {boolean}
    * @fires CmDropdownOpenEvent
-   */
-  open() {
-    this.el.classList.add('cm-dropdown--open');
-    if (this.#currentItem) this.#ensureVisible(this.#currentItem);
-    this.control.emit('cm-dropdown-open', {});
-    this.control.requestItems();
-  }
-
-  /**
-   * Hides the DropDown.
    * @fires CmDropdownCloseEvent
    */
-  close() {
-    this.el.classList.remove('cm-dropdown--open');
-    this.control.emit('cm-dropdown-close', {});
+  get open() {
+    return this.el.classList.contains('cm-dropdown--open');
+  }
+
+  set open(openIt) {
+    if (Boolean(openIt) === this.open) return;
+    if (openIt) {
+      this.el.classList.add('cm-dropdown--open');
+      if (this.#currentItem) this.#ensureVisible(this.#currentItem);
+      this.control.emit('cm-dropdown-open', {});
+      this.control.requestItems();
+    } else {
+      this.el.classList.remove('cm-dropdown--open');
+      this.control.emit('cm-dropdown-close', {});
+    }
   }
 
   /**
@@ -987,7 +1220,7 @@ class DropDown {
    * @param {Item} item
    */
   #ensureVisible(item) {
-    if (!this.el.classList.contains('cm-dropdown--open')) return;
+    if (!this.open) return;
     item.itemView.scrollIntoView({ block: 'nearest' });
   }
 
@@ -1033,10 +1266,6 @@ class DropDown {
     this.control.render();
   }
 
-  toggle() {
-    this.el.classList.toggle('cm-dropdown--open');
-  }
-
   render() {
     this.control.allItems.forEach((item) => item.syncView());
   }
@@ -1068,7 +1297,9 @@ function closestByClass(el, className) {
  * Internal input-mode state machine. Holds the active input mode and the
  * registered mode definitions. Switching the active mode through `current`
  * runs the outgoing mode's `onLeave` and the incoming mode's `onEntry`
- * transition hooks; `processKey()` routes an input event to the active mode's
+ * transition hooks, then notifies the injected transition callback (from which
+ * the component fires `cm-mode-change`); `changeToPrevious()` routes through
+ * the same setter. `processKey()` routes an input event to the active mode's
  * `handlers` set. Not part of the public API — reachable only through the
  * `MSELECT_INTERNALS` symbol exported for tests.
  */
@@ -1079,12 +1310,18 @@ class Modes {
   #current;
   /** @private registered mode definitions, keyed by mode name */
   #definitions = new Map();
+  /** @private `(from, to)` notified after each real transition */
+  #onTransition = null;
 
   /**
    * @param {string} initial the initially active mode name (typically MODES.FILTER)
+   * @param {(from: string, to: string) => void} [onTransition] invoked after
+   *   every real transition with the previous and the new mode name; same-mode
+   *   assignments and unknown-mode errors never notify
    */
-  constructor(initial) {
+  constructor(initial, onTransition) {
     this.#current = initial;
+    this.#onTransition = onTransition || null;
   }
 
   /** The currently active input mode. */
@@ -1103,6 +1340,19 @@ class Modes {
   }
 
   /**
+   * Whether an achieved collapse is held for the interaction as a whole: the
+   * Collapsed mode's own marker, or the DropDown mode entered from it. Derived
+   * from the transition already recorded here, so it cannot fall out of step
+   * with the modes the way a separately maintained flag can.
+   */
+  get holdsCollapse() {
+    return (
+      this.#current === MODES.COLLAPSED ||
+      (this.#current === MODES.DROPDOWN && this.#previous === MODES.COLLAPSED)
+    );
+  }
+
+  /**
    * Registers a mode definition. Mode names are unique; re-registering a mode
    * replaces its definition.
    * @param {string} name one of MODES.*
@@ -1114,8 +1364,9 @@ class Modes {
 
   /**
    * Switches the active input mode, running the outgoing mode's `onLeave` and
-   * the incoming mode's `onEntry` transitions. Switching to the already active
-   * mode is a no-op; switching to an unknown mode throws.
+   * the incoming mode's `onEntry` transitions, then notifying the transition
+   * callback (the component fires `cm-mode-change` from it). Switching to the
+   * already active mode is a no-op; switching to an unknown mode throws.
    * @param {string} name
    * @returns {Modes}
    */
@@ -1125,10 +1376,12 @@ class Modes {
       throw new Error(`Trying to switch to unexisting input mode: ${name}`);
     }
     if (this.#current === name) return this;
-    this.#definitions.get(this.#current)?.onLeave?.();
-    this.#previous = this.#current;
+    const from = this.#current;
+    this.#definitions.get(from)?.onLeave?.();
+    this.#previous = from;
     this.#current = name;
     next.onEntry?.();
+    this.#onTransition?.(from, name);
     return this;
   }
 
@@ -1171,10 +1424,10 @@ class Modes {
  *   right after the tree and the preset selection were built.
  *
  * @typedef {CustomEvent} CmDropdownOpenEvent
- *   Detail: `{}`. Fired whenever the DropDown becomes visible (`open()`).
+ *   Detail: `{}`. Fired whenever the DropDown becomes visible (`open = true`).
  *
  * @typedef {CustomEvent} CmDropdownCloseEvent
- *   Detail: `{}`. Fired whenever the DropDown becomes hidden (`close()`).
+ *   Detail: `{}`. Fired whenever the DropDown becomes hidden (`open = false`).
  *
  * @typedef {CustomEvent<{from: string, to: string}>} CmModeChangeEvent
  *   Detail: `{ from, to }` — names of the previous and the current input mode
@@ -1196,6 +1449,10 @@ export class MSelect {
     this.options = { maxVisibleChips: null, ...(config.options || {}) };
     this.logger = new Logger(this.options.logLevel || 'silent');
 
+    this.#modes = new Modes(MODES.FILTER, (from, to) =>
+      this.emit('cm-mode-change', { from, to })
+    );
+
     this.dropDown = new DropDown(this, [], this.options);
     this.selectionBox = new SelectionBox(this);
 
@@ -1212,7 +1469,9 @@ export class MSelect {
     this.#modes.define(MODES.COLLAPSED, collapsedMode(this));
 
     this.selectionBox.el.addEventListener('click', (e) => this.#onSelectionBoxClick(e));
+    this.el.addEventListener('mousedown', (e) => this.#onControlMouseDown(e));
     document.addEventListener('mousedown', (e) => this.#onDocumentMouseDown(e));
+    document.addEventListener('keydown', (e) => this.#onDocumentKeyDown(e));
 
     if (!this.options.delayedLoad) this.setItems(config.items);
 
@@ -1220,14 +1479,30 @@ export class MSelect {
     this.render();
   }
 
-  /** @private internal input-mode state machine, exposed only via MSELECT_INTERNALS */
-  #modes = new Modes(MODES.FILTER);
+  /** @private internal input-mode state machine, wired in the constructor, exposed only via MSELECT_INTERNALS */
+  #modes;
 
   /** @private Whether the Item tree was already instantiated (setItems one-time). */
   #itemsLoaded = false;
 
   /** @private Whether the one-shot cm-items-request was already emitted. */
   #itemsRequested = false;
+
+  /**
+   * Keeps the Filter input as the control's only keyboard surface while the
+   * user works the mouse: the browser's default for a mousedown on a
+   * non-focusable element (a DropDown Item, a chip) is to move focus to the
+   * clicked element or to the body — silently detaching the keyboard from the
+   * control (REQ-3.11-03). Preventing the mousedown default keeps focus on the
+   * input. The input itself is exempt so its caret behaves natively, and the
+   * action still fires on the subsequent click.
+   * @private
+   * @param {Event} e
+   */
+  #onControlMouseDown(e) {
+    if (e.target === this.selectionBox.filter.el) return;
+    e.preventDefault();
+  }
 
   /**
    * Routes a SelectionBox click to the input mode matching the clicked part.
@@ -1240,13 +1515,13 @@ export class MSelect {
     if (closestByClass(target, 'cm-clear')) {
       this.clearAll();
       this.#activateFilter();
-      this.dropDown.open();
+      this.dropDown.open = true;
       return;
     }
 
     if (closestByClass(target, 'cm-chip--summary')) {
       this.#switchMode(MODES.COLLAPSED);
-      this.dropDown.open();
+      this.dropDown.open = true;
       return;
     }
 
@@ -1256,12 +1531,12 @@ export class MSelect {
 
     if (target === this.selectionBox.filter.el) {
       this.#activateFilter();
-      this.dropDown.open();
+      this.dropDown.open = true;
       return;
     }
 
     this.#switchMode(MODES.DROPDOWN);
-    this.dropDown.open();
+    this.dropDown.open = true;
   }
 
   /**
@@ -1273,18 +1548,42 @@ export class MSelect {
    */
   #activateFilter() {
     this.#switchMode(MODES.FILTER);
-    const input = this.selectionBox.filter.el;
-    input.readOnly = false;
-    if (input !== document.activeElement) input.focus();
+    this.selectionBox.filter.setCaretState({ editable: true, focused: true });
   }
 
   /**
-   * The Filter is the component's only Tab stop, so keyboard input reaches the
-   * component here. The active mode's handler set decides what happens.
+   * The Filter is the component's keyboard surface: while it has focus, its
+   * own keydown listener routes keys here; a document-level listener
+   * (`#onDocumentKeyDown`) catches the same keys when a stray focus landed
+   * outside the input (e.g. after clicking a DropDown Item in some browsers).
+   * The active mode's handler set decides what happens: a handler returning a
+   * truthy value consumed the key (its default behaviour, e.g. text-caret
+   * navigation, is prevented); returning falsy lets the key fall through to
+   * the input's default handling. A per-instance marker dedupes the two paths
+   * for this component, so a single key press is never processed twice.
    * @param {Event} e
    */
   onKeyDown(e) {
-    this.#modes.processKey(e);
+    if (e.__mselectHandledBy === this) return;
+    e.__mselectHandledBy = this;
+    if (this.#modes.processKey(e)) {
+      e.preventDefault?.();
+    }
+  }
+
+  /**
+   * Routes keys the component owns even when the system focus is no longer on
+   * the Filter: while the DropDown is open the component is the keyboard
+   * surface, and keys still land here (Escape closes, arrows navigate)
+   * regardless of where focus sits. With the DropDown closed, only keys
+   * originating inside the control are considered. Events already handled by
+   * the Filter's own listener are deduped inside onKeyDown.
+   * @private
+   * @param {Event} e
+   */
+  #onDocumentKeyDown(e) {
+    if (!this.el.contains(e.target) && !this.dropDown.open) return;
+    this.onKeyDown(e);
   }
 
   /** Focus on the Filter means entering the default Filter mode.
@@ -1306,9 +1605,83 @@ export class MSelect {
   #switchMode(mode) {
     const from = this.#modes.mode;
     if (from === mode) return false;
+    if (
+      (mode === MODES.CHIP || mode === MODES.COLLAPSED) &&
+      this.orderedChips().length === 0
+    ) {
+      mode = MODES.FILTER;
+    }
     this.#modes.current = mode;
-    this.emit('cm-mode-change', { from, to: mode });
     return true;
+  }
+
+  /**
+   * The Chip and Collapsed modes navigate the selection's Chips; with no Chips
+   * left they have nothing to operate on and fall back to the default Filter
+   * mode. An emptied selection also empties a DropDown that was restricted to
+   * the selected Items, so that restriction is dropped and the control returns
+   * to its default state as well. Runs after any mutation that could have
+   * emptied the selection. Reachability of Chip/Collapsed mode is enforced on
+   * entry by #switchMode; this is the same rule applied after the fact, to a
+   * mode the selection was emptied out from under.
+   * @private
+   */
+  #normalizeMode() {
+    const mode = this.#modes.mode;
+    if (this.orderedChips().length === 0) {
+      if (mode === MODES.CHIP || mode === MODES.COLLAPSED) {
+        this.#switchMode(MODES.FILTER);
+      }
+      // Filter mode's entry hook is what drops the restriction and restores the
+      // editable caret, so it runs even when the mode is already Filter and the
+      // transition hook would otherwise be skipped. That hook also clears the
+      // Current marker, which is right when the list is merely being reopened
+      // but wrong here: the Item just unselected is still in the full list
+      // taking its place, so the marker is put back on it.
+      if (this.selectionBox.filter.displaySelected) {
+        const current = this.dropDown.currentItem;
+        this.#activateFilter();
+        if (current) this.dropDown.setCurrent(current);
+      }
+    }
+  }
+
+  /**
+   * Public: switches the active input mode. Mode factories call this to hand
+   * control to another mode mid-interaction (e.g. Filter's ArrowDown opening
+   * the DropDown and entering DropDown mode). Emits cm-mode-change for real
+   * transitions. Same-mode switches are no-ops.
+   * @param {string} mode
+   * @returns {boolean} whether a transition actually happened
+   */
+  switchMode(mode) {
+    return this.#switchMode(mode);
+  }
+
+  /**
+   * Whether an achieved collapse is held for the interaction as a whole, so
+   * that the count alone does not expand the box mid-navigation. True while
+   * Collapsed mode is active and while its DropDown is being navigated, false
+   * everywhere else. Read by SelectionBox; see Modes#holdsCollapse.
+   */
+  get holdsCollapse() {
+    return this.#modes.holdsCollapse;
+  }
+
+  /**
+   * Leaves the current input mode and returns to the one that was active before
+   * it. With no previously active mode recorded (not reachable through normal
+   * flows — every transition records one) it falls back to the default Filter
+   * mode and logs a warning. Emits `cm-mode-change` for real transitions.
+   * @returns {boolean} whether a transition actually happened
+   */
+  changeToPrevious() {
+    const previous = this.#modes.previous;
+    if (!previous) {
+      this.logger.warn('no previous mode recorded; defaulting to "filter"');
+      return this.#switchMode(MODES.FILTER);
+    }
+    return this.#switchMode(previous);
   }
 
   /**
@@ -1322,10 +1695,12 @@ export class MSelect {
    *   first DropDown open, first toggleAll()/clearAll(). See `requestItems()`.
    * - `cm-items-set`      — detail `{ count }`; fired by `setItems()` only in
    *   delayedLoad mode; `count` is the number of instantiated Items.
-   * - `cm-dropdown-open`  — detail `{}`; fired on every `DropDown#open()`.
-   * - `cm-dropdown-close` — detail `{}`; fired on every `DropDown#close()`.
+   * - `cm-dropdown-open`  — detail `{}`; fired on every `open = true` assignment.
+   * - `cm-dropdown-close` — detail `{}`; fired on every `open = false` assignment.
    * - `cm-mode-change`    — detail `{ from, to }`; fired on real input-mode
-   *   transitions only (see `#switchMode`).
+   *   transitions only, from the mode machine itself (the `Modes` transition
+   *   notification), so every switch path emits — keyboard, clicks, and
+   *   `Modes#current`/`changeToPrevious` alike.
    *
    * Example (recommended delayed-load wiring):
    * ```js
@@ -1412,6 +1787,7 @@ export class MSelect {
     for (const item of selected) {
       this.selectionBox.add(item);
     }
+    this.#normalizeMode();
 
     if (this.options.delayedLoad) {
       this.emit('cm-items-set', { count: this.allItems.length });
@@ -1427,11 +1803,9 @@ export class MSelect {
    */
   #onDocumentMouseDown(e) {
     if (this.el.contains(e.target)) return;
-    this.dropDown.close();
+    this.dropDown.open = false;
     this.#switchMode(MODES.FILTER);
-    const input = this.selectionBox.filter.el;
-    input.readOnly = true;
-    input.blur();
+    this.selectionBox.filter.setCaretState({ editable: false, focused: false });
     this.selectionBox.filter.displaySelected = false;
   }
 
@@ -1455,6 +1829,16 @@ export class MSelect {
 
   get allItems() {
     return this.items.flatten();
+  }
+
+  /**
+   * The top-level Items navigation can start from when no Current Item is set
+   * yet: the rendered, togglable ones, in tree order. ArrowDown/ArrowUp begin
+   * here so the marker always lands on a level the user can see.
+   * @returns {Item[]}
+   */
+  get navigableTopLevel() {
+    return [...this.items].filter((item) => item.navigable);
   }
 
   /** Items currently selected, i.e. the chips' source. */
@@ -1492,14 +1876,74 @@ export class MSelect {
    * @param {Item} item
    */
   unselectItem(item) {
+    this.#unselect(item);
+    this.#settleAfterSelectionChange();
+  }
+
+  /**
+   * @private Re-renders the list after a selection change. With the DropDown
+   * restricted to the selected Items the filter is re-run, so an Item that just
+   * lost its selection leaves the visible list instead of lingering there.
+   * Otherwise only the selection state changes, so a plain render is enough —
+   * re-running the text filter here would drop items the pending debounce has
+   * not applied yet.
+   */
+  #syncVisibleList() {
+    if (this.selectionBox.filter.displaySelected) {
+      this.selectionBox.filter.refilter();
+    } else {
+      this.render();
+    }
+  }
+
+  /**
+   * @private Settles the list and the mode after a selection change, then keeps
+   * the Current marker on something the user can actually see.
+   *
+   * The list is re-synced once, at the end of the change: an Item that just lost
+   * its selection must leave a selected-Items-only DropDown, and by then the
+   * whole unselected subtree is done.
+   *
+   * A restricted DropDown lists selected Items only, so unselecting the Current
+   * Item can strand the marker on an Item that has just left the list — most
+   * visibly for a valueless Group, which owns no Chip for
+   * `SelectionBox#remove` to promote from. The marker then moves to the next
+   * visible Item on its own level, or to the last one when nothing follows.
+   *
+   * An emptied list is deliberately left alone: by this point `#normalizeMode`
+   * has returned the control to its full list, where the Item just unselected is
+   * visible again, and keeping the marker on it is the documented behaviour.
+   */
+  #settleAfterSelectionChange() {
+    this.#syncVisibleList();
+    this.#normalizeMode();
+
+    if (
+      this.#modes.mode !== MODES.DROPDOWN ||
+      !this.selectionBox.filter.displaySelected
+    ) {
+      return;
+    }
+    const stranded = this.dropDown.currentItem;
+    if (!stranded || stranded.navigable) return;
+
+    // The Item just left the list, so the walk is asked for its successor in the
+    // list that is left. Every hop filters on `navigable`, which is what makes
+    // "next visible" the walk's own answer rather than a separate lookup.
+    this.dropDown.setCurrent(stranded.next() ?? stranded.previous());
+  }
+
+  /**
+   * @private Clears the selection of `item` and of everything below it. The
+   * list is re-rendered by `unselectItem` once, after the whole subtree is done.
+   * @param {Item} item
+   */
+  #unselect(item) {
     item.selected = false;
     this.selectionBox.remove(item);
-    if (item.isGroup) {
-      for (const child of item) {
-        this.unselectItem(child);
-      }
+    for (const child of item) {
+      this.#unselect(child);
     }
-    this.render();
   }
 
   /**
@@ -1515,7 +1959,7 @@ export class MSelect {
     } else {
       this.selectionBox.remove(item);
     }
-    this.render();
+    this.#settleAfterSelectionChange();
   }
 
   clearAll() {
@@ -1528,6 +1972,7 @@ export class MSelect {
     });
     this.dropDown.clearCurrent();
     this.render();
+    this.#normalizeMode();
   }
 
   toggleAll() {
@@ -1553,7 +1998,7 @@ export class MSelect {
       return;
     }
     this.#switchMode(MODES.CHIP);
-    this.dropDown.open();
+    this.dropDown.open = true;
     this.dropDown.setCurrent(item);
   }
 
@@ -1561,12 +2006,21 @@ export class MSelect {
    * Delegated from an Item's view inside the DropDown (child-side wiring in
    * Item#createDOM). Toggling keeps the Item and its Chip entangled (REQ-3.5-01);
    * the Item is then marked Current.
+   *
+   * A click that empties the selection also drops the selected-Items-only
+   * restriction (see #normalizeMode), replacing the restricted list with the
+   * full one. The click stays in DropDown mode — the mode is not reverted with
+   * it — but the list it was aimed at is gone, so the marker restarts on the
+   * first navigable Item of the restored list instead of following the clicked
+   * one.
    * @param {Item} item
    * @param {Event} e
    */
   onItemViewClick(item) {
+    const restricted = this.selectionBox.filter.displaySelected;
     item.toggle();
-    this.dropDown.setCurrent(item);
+    const restored = restricted && !this.selectionBox.filter.displaySelected;
+    this.dropDown.setCurrent(restored ? this.navigableTopLevel[0] ?? null : item);
     this.#switchMode(MODES.DROPDOWN);
   }
 
