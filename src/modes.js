@@ -123,13 +123,13 @@ export function filterMode(control) {
 /**
  * DropDown mode: navigating the Items list of the open DropDown. Movement is
  * one structural walk in document order over the rendered, togglable Items and
- * does not consult layout. The level's flow picks which keys drive the walk, and
- * with them how a Group on that level is entered: a column is walked with
- * ArrowDown/ArrowUp, and because its children sit on that same axis ArrowDown
- * opens a Group as it steps; a row is walked with ArrowRight/ArrowLeft, and
- * because its children sit off that axis a Group there is a member of the row
- * that ArrowDown opens instead. Reaching the edge of a level needs no rule of
- * its own - the walk falls to the parent and out of it from there. A key with
+ * does not consult layout. Each level is walked by the axis its own flow names -
+ * ArrowUp/ArrowDown on a column, ArrowLeft/ArrowRight on a row - and the other
+ * pair changes depth, so a Group is opened at its first navigable child by either
+ * pair and anything else steps out to the parent's next sibling. Which pair a key
+ * belongs to is read from the level the marker stands on, so no arrow carries a
+ * rule of its own. Reaching the edge of a level needs no rule of its own - the
+ * walk falls to the parent and out of it from there. A key with
  * no target keeps the marker and is still consumed. With no Current Item yet,
  * ArrowDown starts at the first top-level Item and ArrowUp at the last;
  * Home/End and the page steps move within the marker's own level rather than
@@ -168,28 +168,28 @@ export function dropdownMode(control) {
    * layout picks the axis a key drives and never what a movement means.
    */
   const AXES = {
-    // Children of a column Item sit on the column's own axis, so the key along
-    // that axis walks the level and opens a Group in the same step, and the keys
-    // across it are the ones that change level.
-    column: { ArrowDown: 'next', ArrowUp: 'previous', ArrowRight: 'ahead', ArrowLeft: 'outward' },
-    // Children of a row Item sit off the row's own axis, so the key along that
-    // axis can only ever step between the Items of the row: a Group there is a
-    // member of it, and the key across the axis is what opens one.
-    row: { ArrowRight: 'levelNext', ArrowLeft: 'previous', ArrowDown: 'descend', ArrowUp: 'outward' },
+    // Each level is walked by the axis its own flow names; the other pair is the
+    // one that changes depth. Which pair is which depends on the level, never on
+    // the key, so no arrow key carries a rule of its own.
+    column: { ArrowDown: 'walk', ArrowUp: 'back', ArrowRight: 'deeper', ArrowLeft: 'out' },
+    row: { ArrowRight: 'walk', ArrowLeft: 'back', ArrowDown: 'deeper', ArrowUp: 'out' },
   };
 
   /** @private What each role does to the Item it is pressed on. */
   const MOVES = {
-    next: (item) => item.next(),
-    levelNext: (item) => item.nextInLevel(),
-    previous: (item) => item.previous(),
-    descend: (item) => item.descend(),
-    ahead: (item) => item.parentNext(),
-    outward: (item) => item.parentItem,
+    // Along the level's own axis. A column Item's children sit on that axis, so
+    // stepping forward can open a Group; a row Item's children sit off it, so
+    // the same key only ever moves between the members of the row.
+    walk: (item) => (item.inRow ? item.nextInLevel() : item.next()),
+    back: (item) => item.previous(),
+    // Across it. A Group is opened at its first navigable child, and anything
+    // else steps out to the parent's next sibling.
+    deeper: (item) => item.descend() ?? item.parentNext(),
+    out: (item) => item.parentItem,
   };
 
   /** @private The roles that walk a level, and so can start a marker with none set. */
-  const STARTS = new Set(['next', 'levelNext', 'previous']);
+  const STARTS = new Set(['walk', 'back']);
 
   /**
    * @private The role `key` plays on the level `item` stands in, or `null` when
@@ -218,7 +218,7 @@ export function dropdownMode(control) {
       if (list.length === 0) return true;
       const role = roleOf(list[0], key);
       if (!STARTS.has(role)) return false;
-      return moveTo(role === 'previous' ? list[list.length - 1] : list[0]);
+      return moveTo(role === 'back' ? list[list.length - 1] : list[0]);
     }
     const role = roleOf(current, key);
     return role ? moveTo(MOVES[role](current)) : false;

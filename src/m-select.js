@@ -457,6 +457,22 @@ export class Item {
   }
 
   /**
+   * The previous navigable Item of this Item's own level, or `null` when there is
+   * none before it. The mirror of `#nextSibling`, scanning the unfiltered
+   * siblings inward for the same reason it scans them outward.
+   * @private
+   * @returns {Item|null}
+   */
+  #previousSibling() {
+    const siblings = [...this.parent];
+    const index = siblings.indexOf(this);
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (siblings[i].navigable) return siblings[i];
+    }
+    return null;
+  }
+
+  /**
    * The Item after this one in document order: the first navigable child of a
    * Group Item, otherwise its next sibling, bubbling out of a finished subtree
    * to the closest ancestor that still has one. Past the last Item in the tree
@@ -510,12 +526,39 @@ export class Item {
    * @returns {Item|null}
    */
   previous() {
-    const siblings = [...this.parent];
-    const index = siblings.indexOf(this);
-    for (let i = index - 1; i >= 0; i -= 1) {
-      if (siblings[i].navigable) return siblings[i];
-    }
-    return this.parentItem;
+    return this.#previousSibling() ?? this.parentItem;
+  }
+
+  /**
+   * The last navigable Item at the bottom of this Group's subtree, or `null` when
+   * there is none to stand on. The mirror of `descend`, which takes the first.
+   * @returns {Item|null}
+   */
+  lastNavigableDescendant() {
+    const children = this.navigableChildren;
+    if (!this.isGroup || children.length === 0) return null;
+    const last = children[children.length - 1];
+    return last.lastNavigableDescendant() ?? last;
+  }
+
+  /**
+   * The Item standing before this one along the axis of the level it is on: its
+   * previous sibling, stepped into at that sibling's last navigable child when
+   * the children sit on the axis, or the previous sibling itself when they sit
+   * off it. The parent when there is no previous sibling.
+   *
+   * This answers "which Item is before me here", which is not the question
+   * `previous` answers. On a column the children of the previous Group are
+   * members of the same line, so the Item before the last Group of a level is
+   * that Group's last child and not the Group. On a row the children sit off the
+   * axis, so the two are the same Item.
+   * @returns {Item|null}
+   */
+  previousInAxis() {
+    const sibling = this.#previousSibling();
+    if (!sibling) return this.parentItem;
+    if (this.inRow) return sibling;
+    return sibling.lastNavigableDescendant() ?? sibling;
   }
 
   /**
@@ -1928,9 +1971,16 @@ export class MSelect {
     if (!stranded || stranded.navigable) return;
 
     // The Item just left the list, so the walk is asked for its successor in the
-    // list that is left. Every hop filters on `navigable`, which is what makes
-    // "next visible" the walk's own answer rather than a separate lookup.
-    this.dropDown.setCurrent(stranded.next() ?? stranded.previous());
+    // list that is left, and it is asked the way a toggled Item is answered: by
+    // its next sibling. Toggling a Group is an act on the Group itself, so its
+    // subtree is already accounted for and is stepped over rather than walked
+    // into. With no next sibling the answer is the Item that is then the last,
+    // which is the question the axis is asked - and on a column the children of
+    // a Group share its line, so the last one of them is that answer while on a
+    // row they stand off the line and the Group itself is. Every hop filters on
+    // `navigable`, which is what makes "next visible" the walk's own answer
+    // rather than a separate lookup.
+    this.dropDown.setCurrent(stranded.nextInLevel() ?? stranded.previousInAxis());
   }
 
   /**

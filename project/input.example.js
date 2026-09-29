@@ -79,10 +79,12 @@ export const inputExample = {
          * ArrowLeft/ArrowRight, the other two leaving the level for its parent.
          * Defaults: flow 'column'.
          *
-         * A Group on a row level is a row member rather than an entrance:
-         * ArrowRight/ArrowLeft walk the row - off its front end onto the parent,
-         * off its back end onto the parent's next sibling - ArrowDown opens it,
-         * and ArrowUp goes to the parent.
+         * The level is walked by the axis this names, and the other pair of
+         * arrows changes depth. A Group on a row level is a row member rather
+         * than an entrance: ArrowRight/ArrowLeft walk the row - off its front end
+         * onto the parent, off its back end onto the parent's next sibling -
+         * while ArrowDown opens it and ArrowUp goes to the parent. On a column the
+         * same roles are taken by ArrowUp/ArrowDown and ArrowLeft/ArrowRight.
          */
         align: {
 			// the children of every top-level Group (Cities, Sandwich, Select All)

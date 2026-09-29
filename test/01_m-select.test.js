@@ -4060,7 +4060,7 @@ describe('1. MSelect', () => {
     const visibleLabels = (control) =>
       control.allItems.filter((item) => item.navigable).map((item) => item.label);
 
-    it('1.30.25 Space on the Current valueless Group moves Current to the next visible Item', () => {
+    it('1.30.25 Space on the Current valueless Group moves Current to the Groups next sibling', () => {
       const control = strandedSetup();
       control.items[0].toggle(true);
       control.items[1].toggle(true);
@@ -4074,7 +4074,13 @@ describe('1. MSelect', () => {
 
       expect(cities.selected).toBe(false);
       expect(visibleLabels(control)).toEqual(['Alpha', 'Charlie']);
+      // The Group took its child out of the list with it, so the walk that lands
+      // on the sibling is not choosing over the child: the child is not there to
+      // be chosen. The rule asks for the sibling either way.
+      expect(cities[0].navigable).toBe(false);
+      expect(cities.nextInLevel()).toBe(control.items[2]);
       expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(control.dropDown.currentItem).not.toBe(cities[0]);
       expect(cities.current).toBe(false);
       expect(
         control.items[2].itemView.classList.contains('cm-item--current')
@@ -4097,7 +4103,67 @@ describe('1. MSelect', () => {
       expect(cities.current).toBe(false);
     });
 
-    it('1.30.27 the Current marker is left alone when the DropDown is not restricted', () => {
+    // G1[X, Y] then G2[Z]. On a column the children share their Group's line, so
+    // the axis is G1, X, Y, G2, Z and removing the last Group leaves Y as the
+    // last Item on it. On a row the children stand off the line, so the axis is
+    // G1, G2 and removing the last Group leaves G1.
+    const axisSetup = (align) => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { maxVisibleChips: 1, ...align },
+        items: [
+          { label: 'G1', items: [{ value: 'x', label: 'X' }, { value: 'y', label: 'Y' }] },
+          { label: 'G2', items: [{ value: 'z', label: 'Z' }] },
+        ],
+      });
+      const [g1, g2] = control.items;
+      const [x, y] = g1;
+      const [z] = g2;
+      g1.toggle(true);
+      g2.toggle(true);
+      enterRestrictedFromCollapsed(control);
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      return { control, g1, g2, x, y, z };
+    };
+
+    it('1.30.27 removing the last Group on a column leaves Current on the last Item of the axis', () => {
+      const { control, g1, g2, y } = axisSetup();
+      expect(visibleLabels(control)).toEqual(['G1', 'X', 'Y', 'G2', 'Z']);
+      control.dropDown.setCurrent(g2);
+
+      g2.toggle(false);
+
+      // Y, not G1: the column's children share their Group's line, so G1's last
+      // child is the Item that stood before G2, exactly as the Chip-side answer
+      // would be. G1 is the answer previous() gives, and is the wrong one here.
+      expect(control.dropDown.currentItem).toBe(y);
+      expect(control.dropDown.currentItem).not.toBe(g1);
+      expect(visibleLabels(control)).toEqual(['G1', 'X', 'Y']);
+    });
+
+    it('1.30.28 the same removal on a row leaves Current on the previous member of the row', () => {
+      // Depth 0 is the level G1 and G2 stand on, so it is this that is laid out
+      // as a row; their own children stay a column underneath it.
+      const { control, g1, g2 } = axisSetup({ align: { 0: 'row' } });
+      control.dropDown.setCurrent(g2);
+
+      g2.toggle(false);
+
+      expect(control.dropDown.currentItem).toBe(g1);
+    });
+
+    it('1.30.29 a column Group removed from the front of the axis steps out to the next sibling', () => {
+      const { control, g1, g2 } = axisSetup();
+      control.dropDown.setCurrent(g1);
+
+      g1.toggle(false);
+
+      // Forward is answered by the next sibling, not the last Item of the axis:
+      // toggling the Group already settles the children under it.
+      expect(control.dropDown.currentItem).toBe(g2);
+    });
+
+    it('1.30.30 the Current marker is left alone when the DropDown is not restricted', () => {
       const control = groupSetup();
       selectAllOfGroup(control);
       keydown(control.selectionBox.filter.el, 'ArrowDown');
@@ -4923,15 +4989,15 @@ describe('1. MSelect', () => {
       expect(prevented.value).toBe(true);
     });
 
-    it('1.39.6 ArrowRight on a top-level Item has no level to leave and is a consumed no-op', () => {
-      const { control, cities, sandwich } = rowSetup();
+    it('1.39.6 ArrowRight on a top-level leaf has no children and no parent, and is consumed', () => {
+      const { control, kappa, cities } = rowSetup();
       open(control);
-      control.dropDown.setCurrent(cities);
+      control.dropDown.setCurrent(kappa);
 
       const prevented = key(control, 'ArrowRight');
 
-      expect(current(control)).toBe(cities);
-      expect(current(control)).not.toBe(sandwich);
+      expect(current(control)).toBe(kappa);
+      expect(current(control)).not.toBe(cities);
       expect(prevented.value).toBe(true);
     });
 
@@ -5123,13 +5189,64 @@ describe('1. MSelect', () => {
       expect(key(control, 'ArrowDown').value).toBe(true);
       expect(current(control)).toBe(l21);
 
-      // A leaf standing in a row has nothing to open, so it only consumes the key.
-      const { control: other, cities: group, paris: leaf } = rowSetup();
+      // A leaf standing in a row has nothing to open, so the very same key steps
+      // out of the level instead - to the parent's next sibling, not to the
+      // parent it came from.
+      const { control: other, sandwich: group, paris: leaf } = rowSetup();
       open(other);
       other.dropDown.setCurrent(leaf);
       expect(key(other, 'ArrowDown').value).toBe(true);
-      expect(other.dropDown.currentItem).toBe(leaf);
-      expect(other.dropDown.currentItem).not.toBe(group);
+      expect(other.dropDown.currentItem).toBe(group);
+      expect(other.dropDown.currentItem).not.toBe(leaf);
+    });
+
+    it('1.39.22a a column Group whose children are a row opens on either axis', () => {
+      const { control, level2, l21, l24, l241, l242, l25 } = nestedSetup();
+      open(control);
+      expect(l24.inRow).toBe(false);
+      expect(l241.inRow).toBe(true);
+
+      // The column's own axis walks the column and opens the Group in one step.
+      control.dropDown.setCurrent(l24);
+      expect(key(control, 'ArrowDown').value).toBe(true);
+      expect(current(control)).toBe(l241);
+      // Inside a row child level both backward keys land on the parent, and from
+      // there the column's own axis carries on up the column.
+      key(control, 'ArrowUp');
+      expect(current(control)).toBe(l24);
+      key(control, 'ArrowUp');
+      expect(current(control)).toBe(l21);
+
+      // The axis across it opens the Group too, and goes to the parent on the way back.
+      control.dropDown.setCurrent(l24);
+      key(control, 'ArrowRight');
+      expect(current(control)).toBe(l241);
+      control.dropDown.setCurrent(l24);
+      key(control, 'ArrowLeft');
+      expect(current(control)).toBe(level2);
+      expect(current(control)).not.toBe(l241);
+    });
+
+    it('1.39.22b a row of children of a column Group is walked along its own axis', () => {
+      const { control, l24, l241, l242, l25 } = nestedSetup();
+      open(control);
+      control.dropDown.setCurrent(l241);
+
+      key(control, 'ArrowRight');
+      expect(current(control)).toBe(l242);
+      // off the back of the row, out to the parent's next sibling
+      const atEnd = key(control, 'ArrowRight');
+      expect(current(control)).toBe(l25);
+      expect(atEnd.value).toBe(true);
+
+      // across the row: back to the parent, or out past it
+      control.dropDown.setCurrent(l241);
+      key(control, 'ArrowUp');
+      expect(current(control)).toBe(l24);
+      control.dropDown.setCurrent(l241);
+      key(control, 'ArrowDown');
+      expect(current(control)).toBe(l25);
+      expect(current(control)).not.toBe(l241);
     });
 
     it('1.39.22 ArrowLeft on the first Group of a row level is its parent', () => {
@@ -5369,6 +5486,61 @@ describe('1. MSelect', () => {
       expect(cities.next()).toBe(paris);
       expect(paris.nextInLevel()).toBe(london);
       expect(newYork.nextInLevel()).toBe(sandwich);
+    });
+
+    it('1.40.19 previousInAxis steps into the previous sibling on a column and not on a row', () => {
+      const { cities, sandwich, paris, london, newYork, alpha } = build();
+
+      // A column: cities' children share its line, so the Item before sandwich is
+      // the last of them rather than cities itself.
+      expect(sandwich.inRow).toBe(false);
+      expect(sandwich.previousInAxis()).toBe(newYork);
+      expect(sandwich.previousInAxis()).not.toBe(cities);
+      expect(sandwich.previous()).toBe(cities);
+      // A previous sibling with nothing under it is that sibling, stepped into
+      // or not, so the two agree there.
+      expect(london.previousInAxis()).toBe(paris);
+      expect(london.previousInAxis()).toBe(london.previous());
+      // Nothing before it on the level: the parent, as previous() also does.
+      expect(paris.previousInAxis()).toBe(cities);
+      expect(alpha.previousInAxis()).toBeNull();
+      expect(alpha.previousInAxis()).toBe(alpha.previous());
+    });
+
+    it('1.40.20 previousInAxis does not step into a row member, unlike the column', () => {
+      const { level2, level3, l25 } = nestedRow();
+
+      // Level 2 and Level 3 are members of a row, so their children stand off
+      // that row's line and Level 3's predecessor on it is Level 2 itself -
+      // which is what previous() answers, so on a row the two are the same Item.
+      expect(level3.inRow).toBe(true);
+      expect(level3.previousInAxis()).toBe(level2);
+      expect(level3.previousInAxis()).toBe(level3.previous());
+      expect(level3.previousInAxis()).not.toBe(l25);
+    });
+
+    it('1.40.21 lastNavigableDescendant is the mirror of descend', () => {
+      const { cities, sandwich, paris, london, newYork, tuna } = build();
+
+      expect(cities.lastNavigableDescendant()).toBe(newYork);
+      expect(cities.descend()).toBe(paris);
+      expect(sandwich.lastNavigableDescendant()).toBe(tuna);
+      expect(paris.lastNavigableDescendant()).toBeNull();
+      expect(london.lastNavigableDescendant()).toBeNull();
+      expect(newYork.lastNavigableDescendant()).toBeNull();
+    });
+
+    it('1.40.18 the sibling walk a toggled Group is answered with is unaffected by its own children', () => {
+      const { cities, sandwich, paris, london } = build();
+
+      // A collapsed Group and an expanded one are answered identically, because
+      // the walk steps over the subtree rather than looking inside it.
+      cities.expanded = false;
+      expect(cities.nextInLevel()).toBe(sandwich);
+      cities.expanded = true;
+      expect(cities.nextInLevel()).toBe(sandwich);
+      expect(cities.nextInLevel()).not.toBe(paris);
+      expect(paris.nextInLevel()).toBe(london);
     });
 
     it('1.40.17 descend opens a Group at its first navigable child, and is null for a leaf', () => {
