@@ -942,7 +942,6 @@ class SelectionBox {
   constructor(control) {
     this.control = control;
     this.items = [];
-    this.chips = [];
     this.el = document.createElement('div');
     this.el.className = 'cm-selection';
     this.chipsEl = document.createElement('div');
@@ -975,17 +974,34 @@ class SelectionBox {
     return this.#collapsed;
   }
 
+  /**
+   * Whether the selection is small enough for the individual Chips to be shown,
+   * which is the boundary `#updateCollapsedState` draws: a selection larger than
+   * `maxVisibleChips` is collapsed, one of that size or smaller is not.
+   *
+   * This is deliberately not `isCollapsed`. That one holds an achieved collapse
+   * for as long as the interaction is anchored on it, so it stays true through a
+   * count that has fallen back within the limit - which is the point of the hold,
+   * but makes it useless for asking whether the collapse still applies.
+   * @returns {boolean}
+   */
+  get withinChipLimit() {
+    const max = this.control.options.maxVisibleChips;
+    return max == null || this.control.selectedItems.length <= max;
+  }
+
   /** Recomputes the displayed collapse state from the selection count. */
   #updateCollapsedState() {
     this.#ensureCollapsedChip();
-    const max = this.control.options.maxVisibleChips;
-    if (max == null) {
+    if (this.control.options.maxVisibleChips == null) {
       this.#collapsed = false;
       return;
     }
-    const count = this.control.selectedItems.length;
     this.#collapsed =
-      count > max || (this.#collapsed && count > 0 && this.control.holdsCollapse);
+      !this.withinChipLimit ||
+      (this.#collapsed &&
+        this.control.selectedItems.length > 0 &&
+        this.control.holdsCollapse);
   }
 
   /**
@@ -1007,6 +1023,7 @@ class SelectionBox {
   add(item) {
     if (this.items.includes(item)) return;
     this.items.push(item);
+    if (this.control.batching) return;
     this.#updateCollapsedState();
 
     if (this.isCollapsed) {
@@ -1016,7 +1033,7 @@ class SelectionBox {
       return;
     }
 
-    this.chips.push(item.ensureChipView());
+    item.ensureChipView();
     const list = this.control.orderedChips();
     const index = list.indexOf(item);
     const next = list[index + 1];
@@ -1028,17 +1045,35 @@ class SelectionBox {
   }
 
   /**
-   * Removes the given Item's chipView from the selection box.
-   * @param {Item} item
-   */
+    * The chip Views of the Items in the box, in box order, and nothing more.
+    *
+    * Derived from `items` rather than tracked alongside it: the list of what is
+    * in the box is the one thing that cannot disagree with itself, and a mirrored
+    * array only has to be updated in every path that adds, removes or re-renders.
+    * It used to be, and drifted — a chip added while the box was collapsed took
+    * the early return above without ever joining the array, and `render` never
+    * consulted it at all, so a collapse followed by an expansion left the array
+    * describing a box that no longer existed. A Group Item owns no chip and is
+    * left out here for the same reason it owns no Chip.
+    * @returns {HTMLElement[]}
+    */
+  get chips() {
+    return this.items.map((item) => item.chipView).filter(Boolean);
+  }
+
+  /**
+    * Removes the given Item's chipView from the selection box.
+    * @param {Item} item
+    */
   remove(item) {
-    const wasCollapsed = this.isCollapsed;
     const itemIndex = this.items.indexOf(item);
     if (itemIndex >= 0) this.items.splice(itemIndex, 1);
+    // While batching, the chip's place in the box and the collapsed state are the
+    // settling render's to redo from `items`; only the membership is kept here.
+    if (this.control.batching) return;
 
-    const chipIndex = this.chips.indexOf(item.chipView);
-    if (chipIndex >= 0) this.chips.splice(chipIndex, 1);
-
+    // Read before `#updateCollapsedState`, which may change what it says.
+    const wasCollapsed = this.isCollapsed;
     this.#updateCollapsedState();
 
     if (this.isCollapsed) {
@@ -1097,7 +1132,6 @@ class SelectionBox {
    */
   clear() {
     this.items = [];
-    this.chips = [];
     this.collapsedChip = null;
   }
 
@@ -1116,6 +1150,26 @@ class SelectionBox {
   selectLast() {
     const list = this.chipItems;
     if (list.length > 0) this.control.dropDown.setCurrent(list[list.length - 1]);
+  }
+
+  /**
+   * Moves the "Current" marker onto a Chip, for when it has been handed an Item
+   * that owns none - a toggled Group Item, say - while the mode it lands in
+   * navigates Chips and would have nothing to move between. No Chip was vacated
+   * in that case, so there is no slot to point at the way `#promoteSuccessor`
+   * does; the answer is the next Chip along the tree, and the last one when the
+   * marker stands past all of them.
+   * @param {Item} item the Item the marker currently stands on
+   * @returns {boolean} whether a Chip was there to move it to
+   */
+  electChipAfter(item) {
+    const list = this.chipItems;
+    if (list.length === 0) return false;
+    const order = this.control.allItems;
+    const from = order.indexOf(item);
+    const next = list.find((chip) => order.indexOf(chip) > from);
+    this.control.dropDown.setCurrent(next ?? list[list.length - 1]);
+    return true;
   }
 
   /** Moves the "Current" marker to the next chip Item, wrapping at the end. */
@@ -1343,8 +1397,9 @@ function closestByClass(el, className) {
  * transition hooks, then notifies the injected transition callback (from which
  * the component fires `cm-mode-change`); `changeToPrevious()` routes through
  * the same setter. `processKey()` routes an input event to the active mode's
- * `handlers` set. Not part of the public API — reachable only through the
- * `MSELECT_INTERNALS` symbol exported for tests.
+ * `handlers` set. `leaveDropDown()` asks the mode a DropDown was entered from
+ * for its own rule about being left. Not part of the public API — reachable
+ * only through the `MSELECT_INTERNALS` symbol exported for tests.
  */
 class Modes {
   /** @private name of the mode that was active before the current one, if any */
@@ -1399,7 +1454,8 @@ class Modes {
    * Registers a mode definition. Mode names are unique; re-registering a mode
    * replaces its definition.
    * @param {string} name one of MODES.*
-   * @param {{onEntry?: Function, onLeave?: Function, handlers?: Record<string, Function>}} cfg
+   * @param {{onEntry?: Function, onLeave?: Function, onDropDownLeave?: Function,
+   *          handlers?: Record<string, Function>}} cfg
    */
   define(name, cfg = {}) {
     this.#definitions.set(name, { name, ...cfg });
@@ -1435,6 +1491,26 @@ class Modes {
   changeToPrevious() {
     if (this.#previous) this.current = this.#previous;
     return this;
+  }
+
+  /**
+   * Hands the keyboard back from a DropDown the active mode opened, by asking
+   * the mode that DropDown was entered from how it wants to be left.
+   *
+   * The origin is the whole of what a DropDown carries over, and only some
+   * origins read the closing key differently, so that difference is registered
+   * as the origin's own rule and lives with the rest of its behaviour. An origin
+   * with no rule is left to the caller, which falls back to `changeToPrevious` —
+   * the answer for an origin that simply returns as it was.
+   *
+   * @param {'Escape'|'Enter'} key the key that closed the DropDown
+   * @returns {boolean} whether the origin had a rule of its own
+   */
+  leaveDropDown(key) {
+    const origin = this.#previous && this.#definitions.get(this.#previous);
+    if (!origin?.onDropDownLeave) return false;
+    origin.onDropDownLeave(key);
+    return true;
   }
 
   /**
@@ -1728,6 +1804,24 @@ export class MSelect {
   }
 
   /**
+   * Closes the DropDown and hands the keyboard back to the mode it was entered
+   * from. The mode the DropDown was entered from is the whole of what it carries
+   * over, and only Collapsed mode reads the closing key differently, so that
+   * difference is registered as that mode's own rule and asked for here; every
+   * other origin returns as it was, marker and all.
+   *
+   * With no previously active mode recorded (not reachable through normal flows
+   * — every transition records one) there is no origin to ask, and it falls back
+   * to the default Filter mode with a logged warning, through `changeToPrevious`.
+   *
+   * @param {'Escape'|'Enter'} key the key that closed the DropDown
+   */
+  leaveDropDown(key) {
+    this.dropDown.open = false;
+    if (!this.#modes.leaveDropDown(key)) this.changeToPrevious();
+  }
+
+  /**
    * Dispatches a bubbled CustomEvent of the given type on the component's root
    * element, carrying the provided detail. This is the single dispatcher behind
    * the whole public event surface (prefix `cm-`).
@@ -2009,17 +2103,49 @@ export class MSelect {
     } else {
       this.selectionBox.remove(item);
     }
-    this.#settleAfterSelectionChange();
+    if (!this.batching) this.#settleAfterSelectionChange();
+  }
+
+  /** @private nesting depth of bulk selection changes; see `#inBatch`. */
+  #batchDepth = 0;
+
+  /**
+   * Whether a bulk selection change is in progress, so the per-Item work that the
+   * settling render redoes anyway is left out.
+   * @returns {boolean}
+   */
+  get batching() {
+    return this.#batchDepth > 0;
+  }
+
+  /**
+   * Runs a bulk selection change with the per-Item settling and the SelectionBox's
+   * per-Item collapse bookkeeping suspended, leaving one render and settle for the
+   * caller to do at the end. Without it a change touching N Items settles N times
+   * over, re-rendering the whole tree each time.
+   * @template T
+   * @param {() => T} fn
+   * @returns {T}
+   */
+  #inBatch(fn) {
+    this.#batchDepth++;
+    try {
+      return fn();
+    } finally {
+      this.#batchDepth--;
+    }
   }
 
   clearAll() {
     this.logger.info('clear all');
     this.requestItems();
-    this.items.selectableItems.forEach((i) => {
-      if (!i.selected) return;
-      i.selected = false;
-      this.onItemToggled(i);
-    });
+    this.#inBatch(() =>
+      this.items.selectableItems.forEach((i) => {
+        if (!i.selected) return;
+        i.selected = false;
+        this.onItemToggled(i);
+      })
+    );
     this.dropDown.clearCurrent();
     this.render();
     this.#normalizeMode();
@@ -2028,7 +2154,7 @@ export class MSelect {
   toggleAll() {
     this.logger.info('toggle all');
     this.requestItems();
-    this.dropDown.items.toggle();
+    this.#inBatch(() => this.dropDown.items.toggle());
     this.selectionBox.filter.query = '';
     this.render();
   }

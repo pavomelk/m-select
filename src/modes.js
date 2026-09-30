@@ -1,8 +1,11 @@
 /**
- * Input-mode definitions for the MSelect modes machine. Each factory returns
- * the shape `{name, onEntry?, onLeave?, handlers?}` handed to `Modes#define`:
- * the active mode's transition hooks own the DOM side-effects of a mode switch
- * and its `handlers` set processes input events routed by `Modes#processKey`.
+ * Input-mode definitions for the MSelect modes machine. Each factory returns the
+ * shape `{name, onEntry?, onLeave?, onDropDownLeave?, handlers?}` handed to
+ * `Modes#define`: the active mode's transition hooks own the DOM side-effects of
+ * a mode switch, its `handlers` set processes input events routed by
+ * `Modes#processKey`, and `onDropDownLeave` says how a DropDown the mode opened
+ * hands the keyboard back when the closing key means something other than
+ * returning as it was.
  * Factories take the owning MSelect as their only argument so a mode's
  * behaviour lives close to the keys it answers, without adding a private
  * method per handler to the component class.
@@ -38,6 +41,19 @@ const hideCaret = (control) => {
 const closeDropDown = (control) => {
   control.dropDown.open = false;
   return true;
+};
+
+/**
+ * Marks the first navigable Item Current when the DropDown has none. The
+ * navigable top-level Items are read from the list as it stands, so an Item
+ * restricted out of it by the selected-only filter is skipped and the marker
+ * starts on the first one the user can see.
+ * @param {import('./m-select.js').MSelect} control
+ */
+const startMarker = (control) => {
+  if (control.dropDown.currentItem) return;
+  const first = control.navigableTopLevel[0];
+  if (first) control.dropDown.setCurrent(first);
 };
 
 /**
@@ -81,15 +97,8 @@ export function filterMode(control) {
     },
     handlers: {
       ArrowDown: () => {
-        const dd = control.dropDown;
-        if (!dd.open) {
-          const first = control.navigableTopLevel[0];
-          if (first) dd.setCurrent(first);
-          dd.open = true;
-        } else if (!dd.currentItem) {
-          const first = control.navigableTopLevel[0];
-          if (first) dd.setCurrent(first);
-        }
+        startMarker(control);
+        control.dropDown.open = true;
         control.switchMode(MODES.DROPDOWN);
         return true;
       },
@@ -135,10 +144,12 @@ export function filterMode(control) {
  * Home/End and the page steps move within the marker's own level rather than
  * over a flattened tree. SpaceBar toggles the Current Item's selection and stays
  * in DropDown mode; Enter commits the choice — it toggles the Current Item,
- * closes the DropDown and returns to the mode active before it (see
- * MSelect#changeToPrevious). With no Current Item both keys toggle nothing and
- * are still consumed. Escape closes the DropDown without a toggle, returning to
- * the previous mode as well. This mode holds no state of its own: whether the
+ * closes the DropDown and hands back to the mode it was entered from, which for
+ * a DropDown entered from Collapsed mode means Chip mode once the toggle has
+ * brought the count back within maxVisibleChips (see MSelect#leaveDropDown).
+ * With no Current Item both keys toggle nothing and are still consumed. Escape
+ * closes the DropDown without a toggle and hands back the same way, to Filter
+ * mode from a Collapsed origin. This mode holds no state of its own: whether the
  * selection stays shown as the summary chip is MSelect#holdsCollapse, which is
  * true for the DropDown entered from Collapsed mode and false for one entered
  * from Chip or Filter mode.
@@ -242,8 +253,7 @@ export function dropdownMode(control) {
   return {
     handlers: {
       Escape: () => {
-        control.dropDown.open = false;
-        control.changeToPrevious();
+        control.leaveDropDown('Escape');
         return true;
       },
       ArrowDown: move,
@@ -257,8 +267,7 @@ export function dropdownMode(control) {
       Enter: () => {
         const current = control.dropDown.currentItem;
         if (current) current.toggle();
-        control.dropDown.open = false;
-        control.changeToPrevious();
+        control.leaveDropDown('Enter');
         return true;
       },
       ' ': () => {
@@ -357,16 +366,25 @@ export function chipMode(control) {
  * leaving: Filter mode's entry hook is its single owner, so that a handover to
  * DropDown mode keeps the selected Items listed and navigable. The collapse is
  * held too, but by no code here — MSelect#holdsCollapse is what decides, and it
- * stays true for the DropDown this mode hands over to. ArrowRight exits to the
- * default Filter mode. ArrowDown opens the DropDown, and a repeated ArrowDown
- * moves on to DropDown mode with the DropDown still restricted to the selected
- * Items, so that list is navigable.
+ * stays true for the DropDown this mode hands over to. This origin also hands
+ * over a Current marker, started on the first navigable Item of the restricted
+ * list, since the Collapsed Chip carries an Item of no value to bring one.
+ * ArrowRight exits to the default Filter mode. ArrowDown opens the DropDown,
+ * and a repeated ArrowDown moves on to DropDown mode with the DropDown still
+ * restricted to the selected Items, so that list is navigable. Escape and Enter
+ * in that DropDown do not come back here; `onDropDownLeave` below says where they
+ * go instead, which is this mode's own business and no other origin's.
  * @param {import('./m-select.js').MSelect} control
  */
 export function collapsedMode(control) {
   return {
     onEntry: () => {
       setDisplaySelected(control, true);
+      // The Collapsed Chip is what carries "Current" here, so the marker the
+      // closed list left on an Item is dropped rather than remembered: two marks
+      // at once would show both as current, and a later ArrowDown re-seeds the
+      // marker on the first navigable Item of the restricted list anyway.
+      control.dropDown.clearCurrent();
       if (control.selectionBox.collapsedChip) {
         control.selectionBox.collapsedChip.current = true;
       }
@@ -375,6 +393,46 @@ export function collapsedMode(control) {
       if (control.selectionBox.collapsedChip) {
         control.selectionBox.collapsedChip.current = false;
       }
+    },
+    /**
+     * How this mode is left by the DropDown it handed the keyboard to. It is
+     * registered here rather than branched on at the closing key, because it is
+     * this origin's rule and belongs beside the rest of its behaviour. No other
+     * origin has one: a DropDown opened from Filter or Chip mode returns there as
+     * it was, marker and all.
+     *
+     * - `Escape` drops to Filter mode instead of coming back here. Escape commits
+     *   nothing, and the restriction exists only so a selection the Collapsed Chip
+     *   hides stays navigable, which a DropDown on its way out no longer needs —
+     *   Filter's entry hook drops the restriction and clears the marker.
+     * - `Enter` toggles, and the box is then judged on what the toggle left
+     *   behind. While the count is still above `maxVisibleChips` the collapse
+     *   still holds, so there are no Chips to navigate and the mark goes back to
+     *   the Collapsed Chip; once within the limit the box has expanded, so Chip
+     *   mode takes over instead, the Collapsed Chip having nothing left to stand
+     *   for. Either way the "Current" Chip is the Chip rule's to answer, never a
+     *   second rule of its own.
+     */
+    onDropDownLeave: (key) => {
+      if (key === 'Escape') {
+        control.switchMode(MODES.FILTER);
+        return;
+      }
+      if (control.selectionBox.withinChipLimit) {
+        // Switch first: the collapse is held by `holdsCollapse`, which the mode
+        // switch releases, so `render` has to come after it to see the box expand.
+        const marker = control.dropDown.currentItem;
+        control.switchMode(MODES.CHIP);
+        control.selectionBox.render();
+        // A toggled Group Item owns no Chip, so the marker the toggle left it on
+        // can stand on an Item Chip mode has nothing to move between. The Chip
+        // rule answers for it, as it did for the Chip it was elected from.
+        if (marker && !control.orderedChips().includes(marker)) {
+          control.selectionBox.electChipAfter(marker);
+        }
+        return;
+      }
+      control.switchMode(MODES.COLLAPSED);
     },
     handlers: {
       Escape: () => closeDropDown(control),
@@ -386,6 +444,12 @@ export function collapsedMode(control) {
         // The restriction survives the switch on its own — only Filter mode's
         // entry hook drops it — so DropDown mode is entered with the selected
         // Items still listed.
+        //
+        // Unlike the other two origins there is no Item to carry the marker in
+        // from, so it is started here on the first navigable Item of the
+        // restricted list. Without it the list would open with nothing Current
+        // and Space and Enter would have nothing to act on.
+        startMarker(control);
         if (control.dropDown.open) {
           control.switchMode(MODES.DROPDOWN);
         } else {

@@ -367,6 +367,68 @@ describe('1. MSelect', () => {
       control.selectionBox.add(item);
       expect(control.selectionBox.chips).toContain(item.chipView);
     });
+
+    it('1.4.5 chips is the chipViews in the box, in step with what is rendered', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { maxVisibleChips: 1 },
+        items: [
+          { value: 'a', label: 'A' },
+          { value: 'b', label: 'B' },
+          { value: 'c', label: 'C' },
+        ],
+      });
+      const [a, b, c] = control.items;
+      const box = control.selectionBox;
+      /**
+       * While the box is showing chips rather than the CollapsedChip, the mirror
+       * has to describe exactly those.
+       */
+      const inStep = () => {
+        expect(box.isCollapsed).toBe(false);
+        expect(box.chips).toEqual(Array.from(box.chipsEl.children));
+      };
+
+      a.toggle(true);
+      inStep();
+      // B goes in past the limit, where the box shows one CollapsedChip instead
+      // and never builds B's chipView. The mirror keeps listing what is in the
+      // box, which is the point of holding it apart from the rendering.
+      b.toggle(true);
+      expect(box.isCollapsed).toBe(true);
+      expect(box.chipsEl.children).toHaveLength(1);
+      expect(box.chips).toEqual([a.chipView]);
+      // Coming back within the limit expands the box, and B's chipView is built
+      // as it expands. The mirror has to follow: it used to be tracked alongside
+      // `items`, so B - added while the box was collapsed - never joined it, and
+      // the mirror was left describing a box that no longer existed.
+      control.unselectItem(a);
+      inStep();
+      expect(box.chipsEl.children).toContain(b.chipView);
+      control.unselectItem(c);
+      inStep();
+      expect(box.chips).toEqual([b.chipView]);
+    });
+
+    it('1.4.6 a Group Item owns no chip, so it is left out of the mirror', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          { label: 'G', items: [{ value: 'x', label: 'X' }] },
+          { value: 'p', label: 'P' },
+        ],
+      });
+      const [group, plain] = control.items;
+      const [x] = group;
+
+      group.toggle(true);
+      plain.toggle(true);
+
+      // The Group is selected as a whole, so what is in the box is its child and
+      // P. The Group never gets a chipView of its own to mirror.
+      expect(group.chipView).toBeFalsy();
+      expect(control.selectionBox.chips).toEqual([x.chipView, plain.chipView]);
+    });
   });
 
   // requires: Item#toggle -> control.onItemToggled -> SelectionBox.add/remove
@@ -449,6 +511,47 @@ describe('1. MSelect', () => {
 
       expect(item.selected).toBe(false);
       expect(item.itemView.classList.contains('cm-item--unselectable')).toBe(true);
+    });
+
+    // requires: MSelect#batching -> SelectionBox#add/remove + #settleAfterSelectionChange
+    it('1.5.6 a bulk selection change settles a number of times that does not grow with the Item count', () => {
+      // Counted rather than timed: what the cost is made of is how often the tree
+      // is re-rendered, and counting it does not go flaky on a slow machine.
+      // `toggleAll` clears the query before its own render, so it settles more
+      // than once; what matters is that the number is a constant rather than one
+      // per Item, so it is compared across sizes instead of pinned.
+      const toggleAllSettles = (n) => {
+        const control = new MSelect(document.createElement('div'), {
+          options: { maxVisibleChips: 2 },
+          items: Array.from({ length: n }, (_, i) => ({ value: 'v' + i, label: 'Item ' + i })),
+        });
+        const settle = vi.spyOn(control, 'render');
+        control.toggleAll();
+        return { settles: settle.mock.calls.length, control };
+      };
+
+      const small = toggleAllSettles(10);
+      const large = toggleAllSettles(500);
+
+      expect(small.control.selectedItems).toHaveLength(10);
+      expect(large.control.selectedItems).toHaveLength(500);
+      expect(large.control.selectionBox.isCollapsed).toBe(true);
+      expect(small.settles).toBeLessThanOrEqual(2);
+      expect(large.settles).toBe(small.settles);
+    });
+
+    it('1.5.7 a single Item still settles on its own, so the batch does not leak', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }],
+      });
+      const settle = vi.spyOn(control, 'render');
+
+      control.items[0].toggle(true);
+
+      expect(control.selectionBox.items).toContain(control.items[0]);
+      expect(settle).toHaveBeenCalled();
+      expect(control.batching).toBe(false);
     });
   });
 
@@ -3650,10 +3753,14 @@ describe('1. MSelect', () => {
       expect(modes(control).mode).toBe('dropdown');
       expect(control.selectionBox.filter.displaySelected).toBe(true);
       expect(control.items[2].visible).toBe(false);
+      // The handover seeds the marker itself, so there is something to act on
+      // without a further keypress, and a further ArrowDown moves along the
+      // restricted list rather than starting the marker.
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
 
       keydown(control.selectionBox.filter.el, 'ArrowDown');
 
-      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
     });
 
     it('1.30.5 unselecting an Item while the DropDown shows only the selected removes it from the list', () => {
@@ -4163,7 +4270,191 @@ describe('1. MSelect', () => {
       expect(control.dropDown.currentItem).toBe(g2);
     });
 
-    it('1.30.30 the Current marker is left alone when the DropDown is not restricted', () => {
+    // Leaving a DropDown entered from Collapsed mode, with maxVisibleChips 1 so
+    // that unselecting one of the two selected Items brings the count back to the
+    // limit and the box has Chips to show again.
+    const leaveSetup = () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('dropdown');
+      return control;
+    };
+
+    it('1.30.31 a DropDown entered from Collapsed mode starts with the first navigable Item marked', () => {
+      const control = leaveSetup();
+
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.items[0].current).toBe(true);
+    });
+
+    it('1.30.32 Space in a DropDown entered from Collapsed mode unselects and the Item leaves the list', () => {
+      const control = leaveSetup();
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      keydown(control.selectionBox.filter.el, ' ');
+
+      expect(control.items[0].selected).toBe(false);
+      expect(control.items[0].visible).toBe(false);
+      // The restricted list holds only the selected, so the marker moves to the
+      // Item that took the vacated place in it.
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.open).toBe(true);
+    });
+
+    it('1.30.33 Escape from a DropDown entered from Collapsed mode drops to Filter mode', () => {
+      const control = leaveSetup();
+
+      keydown(control.selectionBox.filter.el, 'Escape');
+
+      // Commits nothing, and the restricted list existed only to keep a selection
+      // navigable that the Collapsed chip hides, so there is nothing to hand back
+      // to: the restriction goes with the DropDown.
+      expect(modes(control).mode).toBe('filter');
+      expect(control.dropDown.open).toBe(false);
+      expect(control.selectionBox.filter.displaySelected).toBe(false);
+      expect(control.selectionBox.collapsedChip.current).toBe(false);
+      expect(control.dropDown.currentItem).toBeNull();
+      expect(control.items[0].selected).toBe(true);
+    });
+
+    it('1.30.34 Enter from a DropDown entered from Collapsed mode returns to Collapsed while the collapse holds', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      keydown(control.selectionBox.filter.el, 'Enter');
+
+      // Two of three are still selected, so the collapse holds and the Collapsed
+      // chip is what the marker belongs on.
+      expect(modes(control).mode).toBe('collapsed');
+      expect(control.dropDown.open).toBe(false);
+      expect(control.selectionBox.filter.displaySelected).toBe(true);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      expect(control.selectionBox.collapsedChip.current).toBe(true);
+      expect(control.items[0].selected).toBe(false);
+    });
+
+    it('1.30.35 Enter that brings the count back within maxVisibleChips ends in Chip mode on the elected Chip', () => {
+      const control = leaveSetup();
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+
+      keydown(control.selectionBox.filter.el, 'Enter');
+
+      // The box is no longer collapsed, so there are Chips to navigate and the
+      // Collapsed chip has nothing to stand for.
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.open).toBe(false);
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      expect(control.selectionBox.chipsEl.children).toHaveLength(1);
+      expect(control.selectionBox.chipsEl.children[0]).toBe(
+        control.items[1].ensureChipView()
+      );
+      // The marker is the chip the toggle elected - the one that took the
+      // vacated slot - which is the same answer Space gives in this DropDown.
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.30.36 the elected Chip on that Enter is the last one when the vacated chip was last', () => {
+      const control = leaveSetup();
+      control.dropDown.setCurrent(control.items[1]);
+
+      keydown(control.selectionBox.filter.el, 'Enter');
+
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
+    it('1.30.37 a Group toggled off by that Enter hands the marker to a Chip', () => {
+      // Cities[Lyon, Nice] then Sandwich[Tuna]: unselecting Cities leaves only
+      // Tuna selected, so the count comes back within maxVisibleChips and the
+      // list has to end in Chip mode. The marker settles on Sandwich, which owns
+      // no Chip, so the Chip rule answers for it instead.
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { maxVisibleChips: 1 },
+        items: [
+          { label: 'Cities', items: [{ value: 'lyon', label: 'Lyon' }, { value: 'nice', label: 'Nice' }] },
+          { label: 'Sandwich', items: [{ value: 'tuna', label: 'Tuna' }] },
+        ],
+      });
+      const cities = control.items[0];
+      const sandwich = control.items[1];
+      const tuna = sandwich[0];
+      cities.toggle(true);
+      sandwich.toggle(true);
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.dropDown.currentItem).toBe(cities);
+
+      keydown(control.selectionBox.filter.el, 'Enter');
+
+      expect(modes(control).mode).toBe('chip');
+      expect(control.selectionBox.isCollapsed).toBe(false);
+      expect(control.dropDown.currentItem).toBe(tuna);
+      // The marker stands on a Chip, so Chip mode has something to move between.
+      expect(control.orderedChips()).toContain(control.dropDown.currentItem);
+    });
+
+    it('1.30.38 returning to Collapsed mode forgets the marker the list left behind', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'Escape');
+
+      // Escape drops to Filter, which clears it; going back down to Collapsed
+      // must not leave the Collapsed Chip and an Item both marked current.
+      expect(modes(control).mode).toBe('filter');
+      expect(control.dropDown.currentItem).toBeNull();
+
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(modes(control).mode).toBe('collapsed');
+      expect(control.selectionBox.collapsedChip.current).toBe(true);
+      expect(control.dropDown.currentItem).toBeNull();
+      expect([...control.items].some((item) => item.current)).toBe(false);
+    });
+
+    it('1.30.39 the list is re-marked from the top after a Collapsed round trip, not resumed', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      // Space unselects items[0], so it leaves the restricted list, and ArrowDown
+      // moves the marker on to items[2].
+      keydown(control.selectionBox.filter.el, ' ');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+      keydown(control.selectionBox.filter.el, 'Escape');
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(modes(control).mode).toBe('collapsed');
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      // Back at the top of the restricted list rather than where it was left:
+      // items[0] is no longer navigable, so the first one is items[1].
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(control.dropDown.currentItem).not.toBe(control.items[2]);
+    });
+
+    it('1.30.40 the Current marker is left alone when the DropDown is not restricted', () => {
       const control = groupSetup();
       selectAllOfGroup(control);
       keydown(control.selectionBox.filter.el, 'ArrowDown');
