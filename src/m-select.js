@@ -77,7 +77,10 @@ const normalizeValue = (value) =>
  * (an HTML attribute or URL parameter arrives as a string), so it warns no more
  * than `false` does; a value that is neither boolean nor read as false - `0`,
  * `'FALSE'`, `'yes'` - is the case worth reporting, because the author's intent
- * and the component's reading have parted ways.
+ * and the component's reading have parted ways. A flag read as true on an Item
+ * with no value warns too: there is nothing to select, so the flag promises
+ * something the Item cannot deliver. `selectable: false` on a valueless Item is
+ * not reported - it says the same thing the missing value already does.
  * @param {object} spec the Item spec as authored
  * @param {*} value the normalized value
  * @param {boolean} selectable the reading the component settled on
@@ -91,7 +94,7 @@ const warnOnSpec = (spec, value, selectable) => {
       )} is being read as true. Use true or false.`
     );
   }
-  if (value === undefined) {
+  if (value === undefined && selectable) {
     specLog.warn(
       `Item "${spec.label}": "selectable" is set, but the Item has no value, ` +
         'so there is nothing to select. Give it a value or drop the flag.'
@@ -351,6 +354,7 @@ export class Item {
   /**
    * @param {object} spec
    * @param {object[]} spec.items child item specs
+   * @param {string} [spec.tooltip] native tooltip text for the Item and its Chip
    * @param {object} [options] component options (e.g. `align` per level)
    * @param {number} [definitionIndex] position in the owning container's flat
    *   order. Only a starting value: the container renumbers every Item of a
@@ -367,6 +371,13 @@ export class Item {
     }
     this.options = options;
     this.label = spec.label;
+    /**
+     * Native tooltip text (REQ-3.2-07). Rendered on the Item view and, when a
+     * Chip is built, on the Chip view. Kept separate from the label: without a
+     * tooltip there is none, on either view.
+     * @type {string|undefined}
+     */
+    this.tooltip = spec.tooltip;
     this.value = normalizeValue(spec.value);
     this.selectable = normalizeBool(spec.selectable);
     warnOnSpec(spec, this.value, this.selectable);
@@ -1125,6 +1136,10 @@ export class Item {
       if (this.owner) this.owner.onItemViewClick(this, e);
     });
 
+    if (this.tooltip !== undefined && this.tooltip !== null) {
+      li.title = this.tooltip;
+    }
+
     this.itemView = li;
   }
 
@@ -1141,7 +1156,9 @@ export class Item {
 
     const chip = document.createElement('span');
     chip.className = 'cm-chip';
-    chip.title = this.label;
+    if (this.tooltip !== undefined && this.tooltip !== null) {
+      chip.title = this.tooltip;
+    }
     chip._item = this;
 
     const chipLabel = document.createElement('span');
@@ -1271,7 +1288,18 @@ export class Filter {
   set query(value) {
     this.el.value = String(value || '');
     this.#displaySelected = false;
-    this.control.dropDown.filter(this.el.value);
+    this.#applyQuery(this.el.value);
+  }
+
+  /**
+   * Single owner of the text-query path, shared by assigning `query` and by the
+   * debounced input handler: re-filters the DropDown by the query and re-homes the
+   * Current marker to the list it just produced, so the two cannot drift apart.
+   * @param {string} textValue
+   */
+  #applyQuery(textValue) {
+    this.control.dropDown.filter(textValue);
+    this.control.dropDown.rehomeCurrent();
   }
 
   /** Debounced event handler of the input element. */
@@ -1279,7 +1307,7 @@ export class Filter {
     clearTimeout(this.#debounceTimer);
     this.#displaySelected = false;
     this.#debounceTimer = setTimeout(() => {
-      this.control.dropDown.filter(this.query);
+      this.#applyQuery(this.query);
     }, this.debounceDelay);
   }
 
@@ -1710,6 +1738,24 @@ class DropDown {
   }
 
   /**
+   * Re-homes the Current marker after a text query has re-filtered the list: an
+   * Item the query just hid cannot stay marked, so the marker moves to the first
+   * navigable Item, and a query that left nothing to mark drops it. A marker
+   * standing on an Item the query kept visible is left alone, so typing on after
+   * navigating does not drag the marker back to the top on every keystroke.
+   *
+   * This answers for the text query alone. The selected-Items restriction is a
+   * re-filter as well, but it has a rule of its own for the marker — the one
+   * REQ-3.11-27 gives — so Filter#refilter deliberately does not come through
+   * here, and a selection change cannot quietly move the marker this way.
+   */
+  rehomeCurrent() {
+    const current = this.#currentItem;
+    if (current && current.visible) return;
+    this.setCurrent(this.control.navigableTopLevel[0] || null);
+  }
+
+  /**
    * Whether the DropDown is currently visible. Reads return the open state;
    * assigning a boolean shows (open) or hides (close) it. Opening also brings
    * the Current Item into view, fires `cm-dropdown-open`/`cm-dropdown-close`
@@ -1999,16 +2045,24 @@ export class MSelect {
     this.root = root;
     this.options = { maxVisibleChips: null, ...(config.options || {}) };
     this.logger = new Logger(this.options.logLevel || 'silent');
+    // Spec warnings are raised while Items are built below, before any of them
+    // has a control to report to. An explicit logLevel governs them too, so
+    // 'silent' means silent; left unset, they keep their visible default.
+    if (this.options.logLevel !== undefined) specLog.setLevel(this.options.logLevel);
 
-    this.#modes = new Modes(MODES.FILTER, (from, to) =>
-      this.emit('cm-mode-change', { from, to })
-    );
+    this.#modes = new Modes(MODES.FILTER, (from, to) => {
+      this.#markMode(to);
+      this.emit('cm-mode-change', { from, to });
+    });
 
     this.dropDown = new DropDown(this, [], this.options);
     this.selectionBox = new SelectionBox(this);
 
     this.el = document.createElement('div');
     this.el.className = 'cm-select';
+    // The machine starts in Filter mode without a transition, so the class that
+    // mirrors the active mode is set here rather than by the hook above.
+    this.#markMode(this.#modes.mode);
     this.el.append(this.selectionBox.el, this.dropDown.el);
     root.append(this.el);
 
@@ -2179,6 +2233,27 @@ export class MSelect {
     }
     this.#modes.current = mode;
     return true;
+  }
+
+  /**
+   * Mirrors the active mode onto the root element as `cm-select--mode-<mode>`,
+   * one class at a time, so the stylesheet can tell one mode from another
+   * without the stylesheet having to infer it. It is set here rather than in
+   * #switchMode because the machine is the only thing that knows the mode a
+   * request actually landed on: #switchMode turns an unreachable Chip/Collapsed
+   * into Filter mode, and the class has to follow the outcome.
+   *
+   * `cm-dropdown--open` cannot stand in for this. The DropDown is open in Chip
+   * and Collapsed mode too, between the press that opens it and the one that
+   * hands over to DropDown mode, so the open state alone does not say that
+   * DropDown mode is the active one.
+   * @private
+   * @param {string} mode
+   */
+  #markMode(mode) {
+    for (const known of Object.values(MODES)) {
+      this.el.classList.toggle(`cm-select--mode-${known}`, known === mode);
+    }
   }
 
   /**
@@ -2365,8 +2440,9 @@ export class MSelect {
       item.owner = this;
     });
 
-    // Resolved before anything is rendered, so a value naming nothing is reported
-    // against the tree it was read from and the control is left unpopulated.
+    // Resolved before anything is rendered. Unknown, Group and repeated values
+    // are warned about and skipped, so the tree is populated with whatever the
+    // seed still resolves to (REQ-7-20).
     const seeded =
       selectedValues === undefined ? null : this.#resolveSelectedValues(selectedValues);
 
@@ -2401,6 +2477,7 @@ export class MSelect {
       }
     });
     this.selectionBox.render();
+    this.#syncFormValues();
     this.#normalizeMode();
 
     if (this.options.delayedLoad) {
@@ -2425,10 +2502,13 @@ export class MSelect {
 
   /**
    * @private Resolves the `selectedValues` seed to the Items it names, in the order
-   * given. Every value must resolve to an Item that owns a Chip - the same condition
-   * `onItemToggled` builds one under - and a repeat throws, since the same Item
-   * twice has no place in an order. A value that resolves to nothing is reported
-   * rather than skipped: a selection half-read is worse than a loud failure.
+   * given. Only selectable leaves own a Chip, so only they can be named. The
+   * resolution is lenient, because the seed is a selection remembered from a
+   * previous session and a list that no longer matches the tree exactly should
+   * restore what still resolves rather than fail the whole control: a value naming
+   * no Item, a Group (selected through its children, REQ-3.3-04) or a repeat of an
+   * earlier value is warned about and skipped, while the first occurrence of each
+   * value fixes the Chip order. A non-array argument is still a type error.
    * @param {unknown[]} values
    * @returns {Item[]}
    */
@@ -2439,40 +2519,46 @@ export class MSelect {
     const byValue = new Map();
     for (const item of this.allItems) {
       const { value } = item;
-      if (value === undefined || value === null || value === '') continue;
+      if (value === undefined) continue;
       byValue.set(value, item);
     }
     const seen = new Set();
-    return values.map((value) => {
-      if (seen.has(value)) {
-        throw new Error(`selectedValues names "${value}" more than once`);
-      }
-      seen.add(value);
+    const resolved = [];
+    for (const value of values) {
       const item = byValue.get(value);
       if (item === undefined) {
-        throw new Error(`selectedValues names "${value}", which is no Item's value`);
-      }
-      if (item.value === undefined || item.value === null || item.value === '') {
-        throw new Error(
-          `selectedValues names "${value}", whose Item carries no value and so owns no Chip`
+        specLog.warn(
+          `selectedValues names "${value}", which is no Item's value; ignoring it`
         );
+        continue;
       }
       if (item.isGroup) {
-        throw new Error(
-          `selectedValues names "${value}", a Group, which is a container and owns no Chip: name its selectable descendants`
+        specLog.warn(
+          `selectedValues names "${value}", a Group; a Group owns no Chip and is ` +
+            'selected through its children, so it is ignored'
         );
+        continue;
       }
-      return item;
-    });
+      if (seen.has(value)) {
+        specLog.warn(
+          `selectedValues names "${value}" more than once; ignoring the repeat`
+        );
+        continue;
+      }
+      seen.add(value);
+      resolved.push(item);
+    }
+    return resolved;
   }
 
   /**
    * @private States the selection the seed resolves to. The array is the whole
    * selection, so a `selected: true` flag on a spec is a second claim on the same
    * state rather than a fallback: only the named Items end up selected. The flags
-   * are written directly rather than through `Item#toggle`, which is the
-   * interactive path and would cascade a valueless Group over its children - a
-   * claim about which Items are selected, not a request to walk the tree.
+   * are written directly rather than through `Item#toggle`, because this is a
+   * claim about which Items are selected, not a request to interactively walk the
+   * tree and emit toggles - a Group settles from its children's counters, not from
+   * a flag of its own (REQ-3.3-04).
    * @param {Item[]} seeded
    */
   #applySeed(seeded) {
@@ -2485,12 +2571,13 @@ export class MSelect {
     }
   }
 
-  /** @private Throws when more than one Item declares the same non-empty value. */
+  /** @private Throws when more than one Item declares the same value. An Item
+   * with no value is skipped: there is nothing to collide on. */
   #assertUniqueValues() {
     const seen = new Set();
     for (const item of this.allItems) {
       const value = item.value;
-      if (value === undefined || value === null || value === '') continue;
+      if (value === undefined) continue;
       if (seen.has(value)) {
         throw new Error(`Duplicate item value: "${value}"`);
       }
@@ -2520,6 +2607,65 @@ export class MSelect {
   /** Items currently selected, i.e. the chips' source. */
   get selectedItems() {
     return this.items.selectableItems.filter((i) => i.selected);
+  }
+
+  /**
+   * The selection stated as an array of Item values. It is the symmetric read of
+   * the `selectedValues` seed accepted by `setItems`: the values are in arrival
+   * order, the order the seed fixes and the one order that cannot be derived from
+   * the selected state (REQ-5-02), so feeding it back reproduces the same Chips.
+   * It contains selectable leaves only: a Group owns no Chip and is selected
+   * through its children, so it never appears (REQ-3.2-04).
+   * @returns {unknown[]}
+   */
+  get selectedValues() {
+    return this.selectionBox.items.map((item) => item.value);
+  }
+
+  /** @private Hidden-input container for form submission; created on first need. */
+  #formEl = null;
+
+  /** @private Values already warned about the comma delimiter; warn once each. */
+  #commaWarned = new Set();
+
+  /**
+   * @private Mirrors the selection into hidden inputs on `MSelect#el`, so the
+   * selected values submit with the enclosing `<form>` (REQ-6-03, REQ-7-08). One
+   * input per selected Item, named verbatim by `options.name` and emitted in
+   * `selectedValues` order, so `FormData`/`URLSearchParams` carry repeated
+   * entries (`name=v&name=w`) for the server to join. Without a name the control
+   * takes no part in submission.
+   *
+   * The order matches the Chips, not the document: a seed order survives, so
+   * what submits is what `selectedValues` reports. A value containing the comma
+   * the server joins on is submitted as-is but warned about once, because it
+   * cannot be told apart from a separator once joined.
+   */
+  #syncFormValues() {
+    const name = this.options.name;
+    if (!name) return;
+    if (!this.#formEl) {
+      this.#formEl = document.createElement('div');
+      this.#formEl.className = 'cm-form';
+      this.el.append(this.#formEl);
+    }
+    this.#formEl.innerHTML = '';
+    for (const item of this.selectionBox.items) {
+      const value = String(item.value);
+      if (value.includes(',') && !this.#commaWarned.has(value)) {
+        this.#commaWarned.add(value);
+        specLog.warn(
+          `Item "${item.label}": value ${JSON.stringify(value)} contains a comma, ` +
+            `but "${name}" submits as repeated entries the server joins with commas, ` +
+            'so the value cannot be told apart after the join.'
+        );
+      }
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = value;
+      this.#formEl.append(input);
+    }
   }
 
   /**
@@ -2602,6 +2748,7 @@ export class MSelect {
    * visible again, and keeping the marker on it is the documented behaviour.
    */
   #settleAfterSelectionChange() {
+    this.#syncFormValues();
     this.#syncVisibleList();
     this.#normalizeMode();
 
@@ -2760,6 +2907,7 @@ export class MSelect {
   render() {
     this.dropDown.render();
     this.selectionBox.render();
+    this.#syncFormValues();
   }
 }
 
