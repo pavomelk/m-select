@@ -75,7 +75,9 @@ const startMarker = (control) => {
  * - Backspace behaves like text-editing insert mode and only takes over when
  *   the caret sits at the text's leftmost position (nothing left to delete in
  *   the Filter): it then unselects the rightmost Chip, staying in Filter mode.
- *   Anywhere else it is passed down to the input's default text editing.
+ *   With the selection collapsed there is no rightmost Chip to name, so it
+ *   unselects every selected Item instead. Anywhere else it is passed down to
+ *   the input's default text editing.
  *
  * - Escape closes the DropDown.
  *
@@ -119,6 +121,13 @@ export function filterMode(control) {
           control.selectionBox.filter.el.selectionStart ??
           control.selectionBox.filter.query.length;
         if (caret !== 0) return false;
+        // A collapsed selection has no rightmost Chip of its own to single out:
+        // the summary Chip stands for all of it, so the key removes the summary
+        // Chip, and a Chip that stands for the selection is removed as a whole.
+        if (control.selectionBox.isCollapsed) {
+          control.clearAll();
+          return true;
+        }
         const chips = control.orderedChips();
         if (chips.length === 0) return false;
         control.unselectItem(chips[chips.length - 1]);
@@ -369,7 +378,10 @@ export function chipMode(control) {
  * stays true for the DropDown this mode hands over to. This origin also hands
  * over a Current marker, started on the first navigable Item of the restricted
  * list, since the Collapsed Chip carries an Item of no value to bring one.
- * ArrowRight exits to the default Filter mode. ArrowDown opens the DropDown,
+ * ArrowRight exits to the default Filter mode. Delete and Backspace unselect
+ * every selected Item, for the reason the key list above gives, and the emptied
+ * box leaves through Filter mode by way of MSelect#normalizeMode. ArrowDown opens
+ * the DropDown,
  * and a repeated ArrowDown moves on to DropDown mode with the DropDown still
  * restricted to the selected Items, so that list is navigable. Escape and Enter
  * in that DropDown do not come back here; `onDropDownLeave` below says where they
@@ -377,6 +389,15 @@ export function chipMode(control) {
  * @param {import('./m-select.js').MSelect} control
  */
 export function collapsedMode(control) {
+  // The Collapsed Chip stands for the selection as a whole, so the keys that
+  // remove a Chip remove all of it here. Backspace is Chip mode's key for the Chip
+  // left of the marker; with one Chip standing for everything that is the same
+  // Chip, so both keys answer alike rather than one of them doing nothing.
+  const removeCollapsed = () => {
+    control.clearAll();
+    return true;
+  };
+
   return {
     onEntry: () => {
       setDisplaySelected(control, true);
@@ -435,6 +456,8 @@ export function collapsedMode(control) {
       control.switchMode(MODES.COLLAPSED);
     },
     handlers: {
+      Delete: () => removeCollapsed(),
+      Backspace: () => removeCollapsed(),
       Escape: () => closeDropDown(control),
       ArrowRight: () => {
         control.switchMode(MODES.FILTER);

@@ -13,7 +13,6 @@ export const inputExample = {
 		},
 		{
 			label: 'Sandwich',
-			value: 'sandwich',
 			items: [
 				{ label: 'Tuna', value: 'tuna' },
 				{ label: 'Vegetables', value: 'just-grass' },
@@ -25,14 +24,12 @@ export const inputExample = {
 			items: [
 				{
 					label: 'Level 2',
-					value: 'l2',
 					items: [
 						{ label: 'Level 2.1', value: 'l2.1' },
 						{ label: 'Level 2.2', value: 'l2.2' },
 						{ label: 'Level 2.3' },
 						{
 							label: 'Level 2.4',
-							value: 'l2.4',
 							items: [
 								{ label: 'Level 2.4.1', value: 'l2.4.1' },
 								{ label: 'Level 2.4.2', value: 'l2.4.2' }
@@ -43,7 +40,6 @@ export const inputExample = {
 				},
 				{
 					label: 'Level 3',
-					value: 'l3',
 					items: [
 						{ label: 'Level 3.1', value: 'l3.1' },
 						{ label: 'Level 3.2' },
@@ -59,13 +55,16 @@ export const inputExample = {
         maxVisibleItems: 8,
 		/**
 		 * Orders the given selected items as chips, according to `chipPlaceOrder`:
-		 * - 'asPicked': in the order items were selected by the user.
+		 * - 'unsorted': in the order the chips arrived in the SelectionBox, the most
+		 *   recently selected item at the tail - so an item unselected and selected
+		 *   again moves to the tail. Items selected at instantiation arrive in
+		 *   definition order, so this yields the same order as 'asDefined' then.
 		 * - 'asDefined': in the order items were passed in (definition/DropDown
 		 *   order), i.e. by each Item's own `definitionIndex` (pre-order position
 		 *   in the original tree), regardless of when each was selected.
 		 * - 'alphabetical': sorted by label.
         */
-        chipPlaceOrder: 'asPicked',
+        chipPlaceOrder: 'unsorted',
         logLevel: 'silent',
         /**
          * Layout of a hierarchy level, keyed by the depth of the *Items* it holds
@@ -94,17 +93,23 @@ export const inputExample = {
 		},
         groupItems: {
             /**
-             * Whether toggling a Group Item cascades to every one of its children
-             * ('all', default) or only to the ones currently visible under the active
-             * Filter query ('visible'). Does not affect a Group's own `selected`/
-             * `partial` indicator, which always considers every selectable child regardless of
-             * visibility.
-             */
-            toggleScope: 'all',
+* What a toggle reaches: whether activating a Group Item cascades to
+              * every one of its children ('all') or only to the ones currently
+              * visible under the active Filter query ('visible', default). Useful
+              * when a filter is applied and the user means to select just the
+              * Items that fit it. Does not affect a Group's own `selected`/`partial`
+              * indicator, which always considers every selectable child regardless
+              * of visibility. Read only when the user acts; see `filterScope` for
+              * the separate decision about what filtering reveals.
+              */
+            toggleScope: 'visible',
             /**
-             * When Group Item label matches filter criterion all its children remain
-             * visible ('all', default) otherwise only Child Items that match 
-             * filtering criteria become visible ('matching')
+             * What filtering reveals: when a Group Item's label matches the query,
+             * all of its children remain visible ('all', default) or only the
+             * children that match the query themselves do ('matching'). Read only
+             * when the query changes; independent of `toggleScope`, so the two can
+             * be combined freely - e.g. filter down with 'matching', then let a
+             * toggle reach the survivors with 'visible'.
              */
             filterScope: 'matching',
         },
