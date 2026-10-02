@@ -52,6 +52,17 @@
   gap: var(--cm-gap);
 }
 
+/* DropDown mode is the one mode where the keyboard has left the Selection Box and
+   gone into the list, so the Chips are held back from the foreground while it is
+   active. It is the Chips and not the whole box that are dimmed: the Filter keeps
+   the system focus for the whole session, so dimming the box would dim the very
+   element being typed into. The mode class is what keys this, and not
+   cm-dropdown--open, because the DropDown is open in Chip and Collapsed mode too -
+   between the press that opens it and the one that hands over to DropDown mode. */
+.cm-select--mode-dropdown .cm-chips {
+  opacity: var(--cm-inactive-opacity);
+}
+
 .cm-chip {
   display: inline-flex;
   align-items: center;

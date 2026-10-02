@@ -2637,6 +2637,107 @@ expect(walks).toBe(0);
       expect(control.items[1].visible).toBe(false);
       expect(control.items[2].visible).toBe(false);
     });
+
+    // A text query re-filters the list, and that is also the moment the Current
+    // marker is re-homed: an Item the query hid cannot stay marked, one it kept
+    // visible keeps the marker, and with no marker at all the first visible Item
+    // takes it. The selected-Items restriction is a re-filter too, but it has a
+    // rule of its own for the marker and is deliberately left out of this.
+    const triple = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+
+    it('1.13.14 typing into the Filter marks the first visible Item Current when none is set', () => {
+      const control = triple();
+      control.selectionBox.filter.el.click();
+      expect(control.dropDown.currentItem).toBeNull();
+
+      control.selectionBox.filter.query = 'al';
+
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.items[0].itemView.classList.contains('cm-item--current')).toBe(true);
+    });
+
+    it('1.13.15 the marker starts on the first visible Item, stepping over the ones the query hid', () => {
+      const control = triple();
+      expect(control.items[0].visible).toBe(true);
+
+      control.selectionBox.filter.query = 'ra';
+
+      expect(control.items[0].visible).toBe(false);
+      expect(control.items[1].visible).toBe(true);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(control.items[0].itemView.classList.contains('cm-item--current')).toBe(false);
+    });
+
+    it('1.13.16 a marker standing on a still visible Item survives the re-filter', () => {
+      const control = triple();
+      control.dropDown.setCurrent(control.items[2]);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+
+      control.selectionBox.filter.query = 'a';
+
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[2].visible).toBe(true);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+    });
+
+    it('1.13.17 a marker on an Item the query hides moves to the first visible Item', () => {
+      const control = triple();
+      control.dropDown.setCurrent(control.items[2]);
+
+      control.selectionBox.filter.query = 'al';
+
+      expect(control.items[2].visible).toBe(false);
+      expect(control.items[2].itemView.classList.contains('cm-item--current')).toBe(false);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
+    it('1.13.18 a query matching nothing leaves the marker on nothing', () => {
+      const control = triple();
+      control.dropDown.setCurrent(control.items[0]);
+
+      control.selectionBox.filter.query = 'zz';
+
+      expect(control.allItems.every((item) => !item.visible)).toBe(true);
+      expect(control.dropDown.currentItem).toBeNull();
+    });
+
+    it('1.13.19 the debounced typing path re-homes the marker just as the query setter does', () => {
+      const control = triple();
+      vi.useFakeTimers();
+
+      try {
+        const el = control.selectionBox.filter.el;
+        el.value = 'al';
+        el.dispatchEvent({ type: 'input' });
+        expect(control.dropDown.currentItem).toBeNull();
+
+        vi.advanceTimersByTime(300);
+
+        expect(control.dropDown.currentItem).toBe(control.items[0]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('1.13.20 the selected-Items re-filter leaves the Current marker to its own rule', () => {
+      const control = triple();
+      control.dropDown.setCurrent(control.items[1]);
+      control.items[2].toggle(true);
+
+      control.selectionBox.filter.displaySelected = true;
+
+      expect(control.items[1].visible).toBe(false);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
   });
 
   // requires: options.maxVisibleChips, CollapsedChip (chipView, current,
@@ -3859,6 +3960,76 @@ expect(walks).toBe(0);
       expect(seen).toEqual([{ type: 'cm-mode-change', detail: { from: 'filter', to: 'collapsed' } }]);
     });
 
+    // The root element carries the active mode as a class so the stylesheet can
+    // tell one mode from another. cm-dropdown--open cannot stand in for it: the
+    // DropDown is open in Chip and Collapsed mode too, between the press that
+    // opens it and the one that hands over to DropDown mode.
+    const modeClasses = (control) =>
+      ['filter', 'chip', 'collapsed', 'dropdown'].filter((mode) =>
+        control.el.classList.contains(`cm-select--mode-${mode}`)
+      );
+
+    it('1.21.33 the root element carries the initial mode as a class', () => {
+      const control = setup({ maxVisibleChips: 2 });
+
+      expect(control.el.classList.contains('cm-select--mode-filter')).toBe(true);
+      expect(modeClasses(control)).toEqual(['filter']);
+    });
+
+    it('1.21.34 a mode transition swaps the class over to the new mode', () => {
+      const control = setup({ maxVisibleChips: 2 });
+      for (const item of [...control.items].slice(0, 3)) item.toggle(true);
+      control.selectionBox.el.dispatchEvent({
+        type: 'click',
+        target: control.selectionBox.collapsedChip.chipView,
+      });
+
+      expect(modeClasses(control)).toEqual(['collapsed']);
+      expect(control.el.classList.contains('cm-select--mode-filter')).toBe(false);
+    });
+
+    it('1.21.35 exactly one mode class is present at a time, over a run of transitions', () => {
+      const control = setup({ maxVisibleChips: 2 });
+      for (const item of [...control.items].slice(0, 3)) item.toggle(true);
+      const filter = control.selectionBox.filter.el;
+      const keydown = (key) => filter.dispatchEvent({ type: 'keydown', key, preventDefault() {} });
+
+      keydown('ArrowLeft');
+      expect(modeClasses(control)).toEqual(['collapsed']);
+
+      // The DropDown is still closed here, so the first ArrowDown only opens it.
+      keydown('ArrowDown');
+      expect(control.dropDown.open).toBe(true);
+      expect(modeClasses(control)).toEqual(['collapsed']);
+
+      keydown('ArrowDown');
+      expect(modeClasses(control)).toEqual(['dropdown']);
+
+      keydown('Escape');
+      expect(modeClasses(control)).toEqual(['filter']);
+
+      keydown('ArrowLeft');
+      expect(modeClasses(control)).toEqual(['collapsed']);
+
+      keydown('ArrowRight');
+      expect(modeClasses(control)).toEqual(['filter']);
+    });
+
+    it('1.21.36 the mode class names DropDown mode while the DropDown is open in another mode', () => {
+      const control = setup({ maxVisibleChips: 2 });
+      for (const item of [...control.items].slice(0, 3)) item.toggle(true);
+      const filter = control.selectionBox.filter.el;
+      const keydown = (key) => filter.dispatchEvent({ type: 'keydown', key, preventDefault() {} });
+
+      keydown('ArrowLeft');
+      keydown('ArrowDown');
+
+      expect(control.dropDown.open).toBe(true);
+      expect(control.dropDown.el.classList.contains('cm-dropdown--open')).toBe(true);
+      expect(modeClasses(control)).toEqual(['collapsed']);
+      expect(control.el.classList.contains('cm-select--mode-dropdown')).toBe(false);
+    });
+
     it('1.21.13 an Item builds its ChipView only when rendered as an individual chip; collapsed-away and unselected Items stay unbuilt', () => {
       const control = setup({ maxVisibleChips: 1 });
       expect(control.items[0].chipView).toBeNull();
@@ -3912,7 +4083,7 @@ expect(walks).toBe(0);
       expect(control.selectionBox.chips).toHaveLength(50);
     });
 
-    it('1.21.26 a "selected: true" flag on a Group selects its selectable descendants, not the Group itself', () => {
+    it('1.21.31 a "selected: true" flag on a Group selects its selectable descendants, not the Group itself', () => {
       const control = setup(
         {},
         [
@@ -3936,7 +4107,7 @@ expect(walks).toBe(0);
       expect(control.selectedItems.map((i) => i.value)).toEqual(['fr', 'de']);
     });
 
-    it('1.21.27 such a flag stands for the whole subtree, so it selects a child the spec left unselected', () => {
+    it('1.21.32 such a flag stands for the whole subtree, so it selects a child the spec left unselected', () => {
       const control = setup(
         {},
         [
@@ -4034,20 +4205,37 @@ expect(walks).toBe(0);
         expect(chipLabels(control)).toEqual([]);
       });
 
-      it('1.21.21 a value naming no Item throws before the control is populated', () => {
-        expect(() => seeded(['nope'])).toThrow(/nope/);
+      it('1.21.21 a value naming no Item is warned about and skipped, the rest still selected', () => {
+        const warn = vi.spyOn(specLog, 'warn').mockImplementation(() => {});
+        const control = seeded(['e', 'nope', 'o']);
+
+        expect(control.selectedValues).toEqual(['e', 'o']);
+        expect(chipLabels(control)).toEqual(['Echo', 'Oscar']);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0][0]).toContain('nope');
+        warn.mockRestore();
       });
 
-      it('1.21.22 a value naming a valueless Item throws, since it owns no Chip', () => {
-        expect(() =>
-          seeded(['cities'], [
-            { label: 'Cities', items: [{ value: 'lyon', label: 'Lyon' }] },
-          ])
-        ).toThrow(/cities/);
+      it('1.21.22 a Leaf with no value cannot be named, so the value is unknown and skipped', () => {
+        const warn = vi.spyOn(specLog, 'warn').mockImplementation(() => {});
+        const control = seeded(['cities'], [
+          { label: 'Cities', items: [{ value: 'lyon', label: 'Lyon' }] },
+        ]);
+
+        expect(control.selectedItems).toHaveLength(0);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0][0]).toContain('cities');
+        warn.mockRestore();
       });
 
-      it('1.21.23 a repeated value throws', () => {
-        expect(() => seeded(['e', 'e'])).toThrow(/e/);
+      it('1.21.23 a repeated value is warned about and skipped, keeping the first occurrence', () => {
+        const warn = vi.spyOn(specLog, 'warn').mockImplementation(() => {});
+        const control = seeded(['e', 'o', 'e']);
+
+        expect(control.selectedValues).toEqual(['e', 'o']);
+        expect(chipLabels(control)).toEqual(['Echo', 'Oscar']);
+        expect(warn).toHaveBeenCalledTimes(1);
+        warn.mockRestore();
       });
 
       it('1.21.24 a non-array second argument throws', () => {
@@ -4065,16 +4253,67 @@ expect(walks).toBe(0);
         expect(chipLabels(control)).toEqual(['Oscar', 'Echo']);
       });
 
-      it('1.21.27 a value naming a Group throws, since a Group is a container and owns no Chip', () => {
-        expect(() =>
-          seeded(['europe'], [
-            {
-              value: 'europe',
-              label: 'Europe',
-              items: [{ value: 'fr', label: 'France' }],
-            },
-          ])
-        ).toThrow(/europe/);
+      it('1.21.26 a value naming a Group is warned about and skipped; the Group is selected through its children', () => {
+        const warn = vi.spyOn(specLog, 'warn').mockImplementation(() => {});
+        const control = seeded(['europe', 'fr'], [
+          {
+            value: 'europe',
+            label: 'Europe',
+            items: [
+              { value: 'fr', label: 'France' },
+              { value: 'de', label: 'Germany' },
+            ],
+          },
+        ]);
+
+        const group = control.items[0];
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0][0]).toContain('europe');
+        expect(control.selectedValues).toEqual(['fr']);
+        expect(group.selectionState).toBe('partial');
+        warn.mockRestore();
+      });
+
+      it('1.21.27 the group value is an accessor only: it never reaches the selection set', () => {
+        const control = seeded(['fr', 'de'], [
+          {
+            value: 'europe',
+            label: 'Europe',
+            items: [
+              { value: 'fr', label: 'France' },
+              { value: 'de', label: 'Germany' },
+            ],
+          },
+        ]);
+
+        expect(control.selectedValues).toEqual(['fr', 'de']);
+        expect(control.selectedValues).not.toContain('europe');
+        expect(control.items[0].selectionState).toBe('all');
+      });
+
+      it('1.21.28 selectedValues reads the selection back as leaf values, in Chip order', () => {
+        const control = seeded(['e', 'o', 'r']);
+
+        expect(control.selectedValues).toEqual(['e', 'o', 'r']);
+      });
+
+      it('1.21.29 a stale list restores what still resolves, warning about the rest', () => {
+        const warn = vi.spyOn(specLog, 'warn').mockImplementation(() => {});
+        const control = seeded(['gone', 'o', 'e']);
+
+        expect(control.selectedValues).toEqual(['o', 'e']);
+        expect(warn).toHaveBeenCalledTimes(1);
+        warn.mockRestore();
+      });
+
+      it('1.21.30 the getter round-trips: feeding selectedValues back reproduces the selection', () => {
+        const first = seeded(['e', 'o', 'r']);
+        const values = first.selectedValues;
+
+        const second = seeded(values);
+
+        expect(second.selectedValues).toEqual(values);
+        expect(chipLabels(second)).toEqual(chipLabels(first));
       });
     });
   });
@@ -4891,6 +5130,22 @@ expect(walks).toBe(0);
       expect(control.selectionBox.collapsedChip.current).toBe(true);
     });
 
+    it('1.30.2a the opening ArrowDown starts no Item marker, so the Collapsed Chip is the only Current', () => {
+      const control = setup();
+      selectAll(control);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+      expect(control.dropDown.currentItem).toBe(null);
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(modes(control).mode).toBe('collapsed');
+      expect(control.dropDown.currentItem).toBe(null);
+      expect(
+        control.allItems.some((item) => item.itemView.classList.contains('cm-item--current'))
+      ).toBe(false);
+      expect(control.selectionBox.collapsedChip.current).toBe(true);
+    });
+
     it('1.30.3 a repeated ArrowDown moves on to DropDown mode, still restricted to the selected Items', () => {
       const control = setup();
       selectAll(control);
@@ -4925,6 +5180,22 @@ expect(walks).toBe(0);
 
       keydown(control.selectionBox.filter.el, 'ArrowDown');
 
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+    });
+
+    it('1.30.4a the handover marker starts on the first navigable Item, skipping unselected ones', () => {
+      const control = setup();
+      selectAll(control);
+      control.items[0].toggle(false);
+      keydown(control.selectionBox.filter.el, 'ArrowLeft');
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('collapsed');
+      expect(control.dropDown.currentItem).toBe(null);
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(modes(control).mode).toBe('dropdown');
       expect(control.dropDown.currentItem).toBe(control.items[1]);
     });
 
@@ -5987,7 +6258,8 @@ expect(walks).toBe(0);
   });
 
   // requires: clicking the Filter opening the DropDown without setting any
-  // Current marker (list navigation starts only from DropDown mode)
+  // Current marker of its own (list navigation starts only from DropDown mode),
+  // a marker a re-filter already put in place being left exactly where it stands
   describe('34. Mouse - clicking the Filter opens the DropDown without a Current Item', () => {
     const setup = () => {
       const host = document.createElement('div');
@@ -6010,14 +6282,18 @@ expect(walks).toBe(0);
       expect(control.dropDown.currentItem).toBeNull();
     });
 
-    it('1.34.2 clicking the Filter never marks an Item Current, whatever the query', () => {
+    it('1.34.2 clicking the Filter marks nothing of its own, whatever the query marked', () => {
       const control = setup();
       control.selectionBox.filter.query = 'Bravo';
+      // The query is what hands the marker over, not the click: a re-filter puts
+      // it on the first visible Item, and the click that opens the list must leave
+      // exactly that marker alone.
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
 
       control.selectionBox.filter.el.click();
 
       expect(control.dropDown.open).toBe(true);
-      expect(control.dropDown.currentItem).toBeNull();
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
     });
 
     it('1.34.3 clicking the Filter while the DropDown is already open leaves the marker', () => {

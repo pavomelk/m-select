@@ -467,15 +467,17 @@ export function collapsedMode(control) {
         // The restriction survives the switch on its own — only Filter mode's
         // entry hook drops it — so DropDown mode is entered with the selected
         // Items still listed.
-        //
-        // Unlike the other two origins there is no Item to carry the marker in
-        // from, so it is started here on the first navigable Item of the
-        // restricted list. Without it the list would open with nothing Current
-        // and Space and Enter would have nothing to act on.
-        startMarker(control);
         if (control.dropDown.open) {
+          // The handover press. Unlike the other two origins there is no Item to
+          // carry the marker in from, so it is started here, on the first
+          // navigable Item of the restricted list — without it DropDown mode
+          // would have nothing for Space and Enter to act on.
+          startMarker(control);
           control.switchMode(MODES.DROPDOWN);
         } else {
+          // The opening press. It only reveals the list, and the Collapsed Chip
+          // stays the sole Current while the mode is still Collapsed, so the
+          // marker is deliberately left unstarted until the handover.
           control.dropDown.open = true;
         }
         return true;
