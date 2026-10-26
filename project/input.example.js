@@ -34,7 +34,7 @@ export const inputExample = {
 			]
 		},
 		{
-			label: 'Select All',
+			label: 'Levels',
 			items: [
 				{
 					label: 'Level 2',
@@ -100,7 +100,7 @@ export const inputExample = {
          * same roles are taken by ArrowUp/ArrowDown and ArrowLeft/ArrowRight.
          */
         align: {
-			// the children of every top-level Group (Cities, Sandwich, Select All)
+			// the children of every top-level Group (Cities, Sandwich, Levels)
 			// are a row; level 3 keeps its own row as well
 			1: { flow: 'row' },
 			3: 'row'

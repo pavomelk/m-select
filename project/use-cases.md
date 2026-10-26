@@ -36,21 +36,23 @@ Item, so the field answers "what is picked" on its own.
 ### Narrowing
 
 Clicking the Filter opens the Drop Down without marking anything, so a user who
-only wants to look has not also moved a highlight. Typing narrows the list to the
-matches whether or not the Drop Down is open, and settles the Current marker
-against the list the query just produced: an Item the query still shows keeps the
-marker, an Item it has just hidden cannot hold it and the marker moves to the
-first one still standing, and a query that matches nothing clears the marker
-rather than pointing at something off-screen. Narrowing with the Drop Down closed
-therefore costs nothing — the list is already filtered when `ArrowDown` opens it.
+only wants to look has not also moved a highlight. Typing opens the Drop Down the
+moment the first character lands — changing the query is itself a wish to see the
+list — and narrows it to the matches, settling the Current marker against the list
+the query just produced: an Item the query still shows keeps the marker, an Item
+it has just hidden cannot hold it and the marker moves to the first one still
+standing, and a query that matches nothing clears the marker rather than pointing
+at something off-screen.
 
 ### Entering the list
 
 `ArrowDown` is the way in. It opens the Drop Down and enters DropDown mode in
-the same press, with the first visible Item Current, whether the list was just
-opened by a click or is being opened now after a query narrowed it. With the
-Drop Down already open the same key means the next thing: it walks on to the next
-visible Item, `ArrowUp` walks back.
+the same press, and the press itself is read by the list: with nothing Current it
+starts on the first visible Item, and with a marker the query has already left
+standing it walks on from there. So the first press after typing does not spend
+itself re-marking the Item the query already marked, whether the list was just
+opened by a click or is being opened now after a query narrowed it. From then on
+the same key simply walks, `ArrowUp` walks back.
 
 From there the arrow keys move the Current Item and do nothing else. They are
 consumed by the list rather than by the page, so walking a long list does not
@@ -63,8 +65,11 @@ no element inside the control takes part in the Tab sequence.
 With an Item Current, `SpaceBar` toggles it and leaves the list open, so a run
 of selections is one key repeated over a walk down the list. `Enter` toggles the
 Current Item, closes the Drop Down and hands the keyboard back to the Filter,
-which is how a user says they are done. `Escape` closes the Drop Down without
-toggling anything and returns the same way.
+which is how a user says they are done. `Enter` commits just as well from the
+Filter itself, before the user has entered the list: it toggles the Item the
+query left Current, closes the Drop Down and stays in the Filter, and the key
+never reaches the page, so a form around the control is not submitted by it.
+`Escape` closes the Drop Down without toggling anything and returns the same way.
 
 The mouse does the same work without the detour. Clicking an Item's row toggles
 it, marks it Current and leaves the list open; clicking the "x" on a Chip removes

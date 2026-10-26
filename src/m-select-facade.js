@@ -150,7 +150,8 @@ export class MSelectFacade {
 
   /**
    * Subscribes to a control event (`cm-items-request`, `cm-items-set`,
-   * `cm-dropdown-open`, `cm-dropdown-close`, `cm-mode-change`).
+   * `cm-dropdown-open`, `cm-dropdown-close`, `cm-mode-change`,
+   * `cm-selection-change`).
    * @param {string} type
    * @param {(event: CustomEvent) => void} handler
    * @returns {() => void} unsubscribe

@@ -15,7 +15,7 @@ const LOG_LEVELS = ['silent', 'error', 'warn', 'info', 'debug'];
 const PRESET_SELECTION_LIMIT = 50;
 const PRESET_MAX_VISIBLE_CHIPS = 25;
 
-import { MODES, filterMode, dropdownMode, chipMode, collapsedMode } from './modes.js';
+import { MODES, REDISPATCH, filterMode, dropdownMode, chipMode, collapsedMode } from './modes.js';
 
 /**
  * Simple built-in logger with configurable verbosity.
@@ -1080,8 +1080,16 @@ export class Item {
     }
 
     if (this.isGroup) {
-      for (const child of this) {
-        child.toggle(after);
+      const cascade = () => {
+        for (const child of this) {
+          child.toggle(after);
+        }
+      };
+      // One settle for the whole subtree, not one per descendant (REQ-9-05).
+      if (this.owner) {
+        this.owner.withSelectionBatch(cascade);
+      } else {
+        cascade();
       }
       return this.selected;
     }
@@ -1304,6 +1312,10 @@ export class Filter {
 
   /** Debounced event handler of the input element. */
   onInput() {
+    // Changing the query is itself a wish to see the list, so reveal it at the
+    // first keystroke rather than waiting for the debounce below. Opening is
+    // idempotent, so typing on while it is already open costs nothing.
+    this.control.dropDown.open = true;
     clearTimeout(this.#debounceTimer);
     this.#displaySelected = false;
     this.#debounceTimer = setTimeout(() => {
@@ -1814,7 +1826,6 @@ class DropDown {
    */
   filter(textValue, matchFn) {
     const query = String(textValue || '');
-    this.showSelectAllButton = query !== '';
     const q = query.toLowerCase();
     const customMatcher = typeof matchFn === 'function';
     const matcher = matchFn || ((item) => item.label.toLowerCase().includes(q));
@@ -1838,6 +1849,15 @@ class DropDown {
     };
 
     apply(this.control.items);
+
+    // Select All is a flat action over the visible selectable Leaves. With fewer
+    // than two of them there is nothing to bulk-select: it would repeat a single
+    // Item's toggle, or do nothing at all, so the button stays hidden.
+    const visibleLeaves = this.control.items.selectableItems.filter(
+      (item) => item.visible
+    ).length;
+    this.showSelectAllButton = query !== '' && visibleLeaves > 1;
+
     this.control.render();
   }
 
@@ -1993,12 +2013,20 @@ class Modes {
 
   /**
    * Routes an input event to the active mode's handler for the event's key.
+   * A handler that switched the mode may return REDISPATCH to hand the same
+   * event to the new mode's handler; the lookup is then repeated once, so a key
+   * is owned by the mode it was handed over to rather than by two rules.
    * @param {Event} event
    * @returns {unknown} the handler's result, or false when unhandled
    */
   processKey(event) {
-    const fn = (this.#definitions.get(this.#current)?.handlers || {})[event?.key];
-    return fn ? fn(event) : false;
+    let result = false;
+    for (let pass = 0; pass < 2; pass += 1) {
+      const fn = (this.#definitions.get(this.#current)?.handlers || {})[event?.key];
+      result = fn ? fn(event) : false;
+      if (result !== REDISPATCH) break;
+    }
+    return result;
   }
 }
 
@@ -2031,6 +2059,14 @@ class Modes {
  *   (`MODES.FILTER`, `MODES.DROPDOWN`, `MODES.CHIP`, `MODES.COLLAPSED`). Fired
  *   only for real transitions; assigning the already active mode (e.g.
  *   re-entering Filter while Filter is active) is a no-op and stays silent.
+ *
+ * @typedef {CustomEvent<{values: unknown[], added: unknown[], removed: unknown[]}>} CmSelectionChangeEvent
+ *   Detail: `{ values, added, removed }` — the selection after the change in
+ *   Chip order, the values that entered it and the ones that left. Fired once
+ *   per settled selection change, after the Chips, the visible list and the form
+ *   mirror are up to date; a bulk change (`toggleAll()`, `clearAll()`, assigning
+ *   `selectedValues`, a Group toggle) fires it once, and a settle that moves
+ *   nothing fires nothing. A reorder alone fires with both lists empty.
  */
 
 /**
@@ -2386,6 +2422,9 @@ export class MSelect {
    * control.el.addEventListener('cm-mode-change', ({ detail }) => {
    *   console.log(`mode ${detail.from} -> ${detail.to}`);
    * });
+   * control.el.addEventListener('cm-selection-change', ({ detail }) => {
+   *   console.log(detail.values, `+${detail.added}`, `-${detail.removed}`);
+   * });
    * control.el.addEventListener('cm-dropdown-open', () => console.log('open'));
    * ```
    * @param {string} type one of the `cm-*` event types listed above
@@ -2496,6 +2535,7 @@ export class MSelect {
     if (this.options.delayedLoad) {
       this.emit('cm-items-set', { count: this.allItems.length });
     }
+    this.#emitSelectionChange();
     return this;
   }
 
@@ -2658,6 +2698,7 @@ export class MSelect {
     this.dropDown.clearCurrent();
     this.render();
     this.#normalizeMode();
+    this.#emitSelectionChange();
   }
 
   /** @private Hidden-input container for form submission; created on first need. */
@@ -2791,25 +2832,61 @@ export class MSelect {
     this.#normalizeMode();
 
     if (
-      this.#modes.mode !== MODES.DROPDOWN ||
-      !this.selectionBox.filter.displaySelected
+      this.#modes.mode === MODES.DROPDOWN &&
+      this.selectionBox.filter.displaySelected
     ) {
-      return;
+      const stranded = this.dropDown.currentItem;
+      if (stranded && !stranded.navigable) {
+        // The Item just left the list, so the walk is asked for its successor in
+        // the list that is left, and it is asked the way a toggled Item is
+        // answered: by its next sibling. Toggling a Group is an act on the Group
+        // itself, so its subtree is already accounted for and is stepped over
+        // rather than walked into. With no next sibling the answer is the Item
+        // that is then the last, which is the question the axis is asked - and
+        // on a column the children of a Group share its line, so the last one of
+        // them is that answer while on a row they stand off the line and the
+        // Group itself is. Every hop filters on `navigable`, which is what makes
+        // "next visible" the walk's own answer rather than a separate lookup.
+        this.dropDown.setCurrent(
+          stranded.nextInLevel() ?? stranded.previousInAxis()
+        );
+      }
     }
-    const stranded = this.dropDown.currentItem;
-    if (!stranded || stranded.navigable) return;
 
-    // The Item just left the list, so the walk is asked for its successor in the
-    // list that is left, and it is asked the way a toggled Item is answered: by
-    // its next sibling. Toggling a Group is an act on the Group itself, so its
-    // subtree is already accounted for and is stepped over rather than walked
-    // into. With no next sibling the answer is the Item that is then the last,
-    // which is the question the axis is asked - and on a column the children of
-    // a Group share its line, so the last one of them is that answer while on a
-    // row they stand off the line and the Group itself is. Every hop filters on
-    // `navigable`, which is what makes "next visible" the walk's own answer
-    // rather than a separate lookup.
-    this.dropDown.setCurrent(stranded.nextInLevel() ?? stranded.previousInAxis());
+    this.#emitSelectionChange();
+  }
+
+  /**
+   * @private The selection as reported by the last `cm-selection-change`.
+   */
+  #selectionSnapshot = [];
+
+  /**
+   * @private Emits `cm-selection-change` when the selection has moved since the
+   * last report. `values` is the whole selection in Chip order; `added` holds
+   * the values that entered it and `removed` the ones that left, each in the
+   * order of the array it comes from. A change that only reorders the selection
+   * is reported too, with both lists empty, because the order is part of what
+   * the Chips show. A settle that moves nothing emits nothing, so the event
+   * marks changes a reader would notice rather than internal re-renders.
+   * @fires CmSelectionChangeEvent
+   */
+  #emitSelectionChange() {
+    const values = this.selectedValues;
+    const previous = this.#selectionSnapshot;
+    const unchanged =
+      values.length === previous.length &&
+      values.every((value, index) => value === previous[index]);
+    if (unchanged) return;
+
+    const before = new Set(previous);
+    const after = new Set(values);
+    this.#selectionSnapshot = values;
+    this.emit('cm-selection-change', {
+      values: [...values],
+      added: values.filter((value) => !before.has(value)),
+      removed: previous.filter((value) => !after.has(value)),
+    });
   }
 
   /**
@@ -2861,6 +2938,24 @@ export class MSelect {
   }
 
   /**
+   * Runs a change over a subtree as one settle: the leaves report themselves
+   * while the per-Item settling is suspended, then the Chips, the list and the
+   * form are brought up to date once and one `cm-selection-change` is emitted.
+   * A Group Item's own toggle cascade uses this, so a click on a Group costs one
+   * settle rather than one per descendant (REQ-9-05). Called inside a change
+   * that is already bulk, it joins that change instead of settling early.
+   * @param {() => void} fn
+   */
+  withSelectionBatch(fn) {
+    if (this.batching) {
+      fn();
+      return;
+    }
+    this.#inBatch(fn);
+    this.#settleAfterSelectionChange();
+  }
+
+  /**
    * Runs a bulk selection change with the per-Item settling and the SelectionBox's
    * per-Item collapse bookkeeping suspended, leaving one render and settle for the
    * caller to do at the end. Without it a change touching N Items settles N times
@@ -2891,6 +2986,7 @@ export class MSelect {
     this.dropDown.clearCurrent();
     this.render();
     this.#normalizeMode();
+    this.#emitSelectionChange();
   }
 
   toggleAll() {
@@ -2899,6 +2995,7 @@ export class MSelect {
     this.#inBatch(() => this.dropDown.items.toggle());
     this.selectionBox.filter.query = '';
     this.render();
+    this.#emitSelectionChange();
   }
 
   /* ---- selection interaction ---- */

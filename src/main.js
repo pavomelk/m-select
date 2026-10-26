@@ -59,8 +59,8 @@ const reflect = () => {
     '   mode: ' +
     control.mode;
 };
-const timer = setInterval(reflect, 100);
-window.addEventListener('beforeunload', () => clearInterval(timer));
+control.on('cm-selection-change', reflect);
+control.on('cm-mode-change', reflect);
 reflect();
 
 app.append(state, neighbor, submitted);

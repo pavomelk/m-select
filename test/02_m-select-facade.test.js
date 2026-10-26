@@ -236,6 +236,20 @@ describe('2. MSelectFacade', () => {
 
       expect(seen).toEqual([{ from: 'filter', to: 'dropdown' }]);
     });
+
+    it('2.4.5 selection changes are observable', () => {
+      const { facade } = build();
+      const seen = [];
+      facade.on('cm-selection-change', (e) => seen.push(e.detail));
+
+      facade.select('a');
+      facade.unselect('a');
+
+      expect(seen).toEqual([
+        { values: ['a'], added: ['a'], removed: [] },
+        { values: [], added: [], removed: ['a'] },
+      ]);
+    });
   });
 
   describe('2.5 Teardown', () => {
