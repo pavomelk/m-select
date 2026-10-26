@@ -62,12 +62,14 @@ Before creating code:
 ## Structure
 m-select/
 ├── src/
-│   ├── main.js               (demo entry: imports the CSS, instantiates the demo control)
+│   ├── main.js               (demo entry: imports the CSS, instantiates the demo facade)
 │   ├── m-select.js           (the component)
+│   ├── m-select-facade.js    (value-based public facade the demo and apps use)
 │   ├── modes.js              (per-input-mode definitions: onEntry/onLeave/handlers)
 │   └── m-select.css
 ├── test/
 │   ├── 01_m-select.test.js   (hierarchically numbered: `describe` 1. N, `it` 1.N.M)
+│   ├── 02_m-select-facade.test.js (hierarchically numbered: `describe` 2. N, `it` 2.N.M)
 │   └── dom-stub.js           (minimal DOM stub, for environment: 'node')
 ├── project/
 │   ├── AGENTS.md

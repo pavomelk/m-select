@@ -2034,7 +2034,9 @@ class Modes {
  */
 
 /**
- * The component.
+ * The component. Application code should build a value-based `MSelectFacade`
+ * over it rather than reach into its internals; this class is exported for the
+ * facade, tests, and advanced composition.
  */
 export class MSelect {
   /**
@@ -2075,8 +2077,12 @@ export class MSelect {
 
     this.selectionBox.el.addEventListener('click', (e) => this.#onSelectionBoxClick(e));
     this.el.addEventListener('mousedown', (e) => this.#onControlMouseDown(e));
-    document.addEventListener('mousedown', (e) => this.#onDocumentMouseDown(e));
-    document.addEventListener('keydown', (e) => this.#onDocumentKeyDown(e));
+    // Stored rather than inlined so destroy() can detach them: these are the
+    // listeners that outlive the element and would keep the instance reachable.
+    this.#docMousedown = (e) => this.#onDocumentMouseDown(e);
+    this.#docKeydown = (e) => this.#onDocumentKeyDown(e);
+    document.addEventListener('mousedown', this.#docMousedown);
+    document.addEventListener('keydown', this.#docKeydown);
 
     if (!this.options.delayedLoad) this.setItems(config.items);
 
@@ -2086,6 +2092,13 @@ export class MSelect {
 
   /** @private internal input-mode state machine, wired in the constructor, exposed only via MSELECT_INTERNALS */
   #modes;
+
+  /** @private document-level handler references, so destroy() can detach them */
+  #docMousedown;
+  #docKeydown;
+
+  /** @private guard so destroy() runs its teardown once */
+  #destroyed = false;
 
   /** @private Whether the Item tree was already instantiated (setItems one-time). */
   #itemsLoaded = false;
@@ -2622,6 +2635,31 @@ export class MSelect {
     return this.selectionBox.items.map((item) => item.value);
   }
 
+  /**
+   * States the whole selection at runtime from an array of Item values. The
+   * runtime counterpart of the `selectedValues` seed accepted by `setItems`, and
+   * its symmetric write: same lenient resolution (a value naming no Item, a
+   * Group or a repeat is warned about and skipped, REQ-7-20) and the same order,
+   * so the Chips arrive in the array's order. A non-array argument throws before
+   * anything is changed, leaving the selection untouched. Unlike `setItems` it
+   * may be called any number of times and never rebuilds the Item tree
+   * (REQ-6-04). The change is settled once, so a large selection costs one
+   * render rather than one per Item (REQ-9-05).
+   * @param {unknown[]} values the selection, as Item values in Chip order
+   */
+  set selectedValues(values) {
+    // Resolved first: a bad argument must not leave a half-stated selection.
+    const seeded = this.#resolveSelectedValues(values);
+    this.#inBatch(() => {
+      this.#applySeed(seeded);
+      this.selectionBox.clear();
+      for (const item of seeded) this.selectionBox.add(item);
+    });
+    this.dropDown.clearCurrent();
+    this.render();
+    this.#normalizeMode();
+  }
+
   /** @private Hidden-input container for form submission; created on first need. */
   #formEl = null;
 
@@ -2908,6 +2946,29 @@ export class MSelect {
     this.dropDown.render();
     this.selectionBox.render();
     this.#syncFormValues();
+  }
+
+  /**
+   * The active input mode name: `filter`, `dropdown`, `chip` or `collapsed`.
+   * @returns {string}
+   */
+  get mode() {
+    return this.#modes.mode;
+  }
+
+  /**
+   * Tears the control down: detaches the document-level listeners registered in
+   * the constructor — the only ones that outlive the element and would otherwise
+   * keep the instance reachable — and removes the control's element from the
+   * page. Idempotent. Prefer it over dropping the reference; use
+   * `MSelectFacade#destroy()` from application code.
+   */
+  destroy() {
+    if (this.#destroyed) return;
+    this.#destroyed = true;
+    document.removeEventListener('mousedown', this.#docMousedown);
+    document.removeEventListener('keydown', this.#docKeydown);
+    this.el.remove();
   }
 }
 

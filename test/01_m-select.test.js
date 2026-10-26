@@ -7736,4 +7736,84 @@ expect(walks).toBe(0);
       warn.mockRestore();
     });
   });
+
+  // requires: a selectedValues setter (batched re-selection, the runtime
+  // counterpart of the setItems seed), a public mode getter, and destroy()
+  describe('44. Runtime selection, mode read and teardown', () => {
+    const build = (config = {}, options) => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: config.items || [
+          { value: 'a', label: 'A' },
+          { value: 'b', label: 'B' },
+          { value: 'c', label: 'C' },
+        ],
+        options,
+      });
+    };
+
+    it('1.44.1 the selectedValues setter states the selection in the array order', () => {
+      const control = build();
+      control.items[2].toggle(true);
+
+      control.selectedValues = ['b', 'a'];
+
+      expect(control.selectedValues).toEqual(['b', 'a']);
+      expect(control.items[2].selected).toBe(false);
+    });
+
+    it('1.44.2 the setter is lenient: unknown values are skipped with a warning', () => {
+      const warn = vi.spyOn(specLog, 'warn').mockImplementation(() => {});
+      const control = build();
+
+      control.selectedValues = ['a', 'nope'];
+
+      expect(control.selectedValues).toEqual(['a']);
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+    });
+
+    it('1.44.3 a non-array seed throws and leaves the selection untouched', () => {
+      const control = build();
+      control.items[0].toggle(true);
+
+      expect(() => {
+        control.selectedValues = 'a';
+      }).toThrow(/array/);
+      expect(control.selectedValues).toEqual(['a']);
+    });
+
+    it('1.44.4 mode reports the active input mode', () => {
+      const control = build();
+      expect(control.mode).toBe('filter');
+
+      control.dropDown.open = true;
+      control.onKeyDown({ key: 'ArrowDown', preventDefault() {} });
+
+      expect(control.mode).toBe('dropdown');
+    });
+
+    it('1.44.5 destroy detaches the document listeners it registered', () => {
+      const control = build();
+      control.dropDown.open = true;
+      document.dispatchEvent({ type: 'mousedown', target: document.body });
+      expect(control.dropDown.open).toBe(false);
+
+      control.dropDown.open = true;
+      control.destroy();
+      document.dispatchEvent({ type: 'mousedown', target: document.body });
+      expect(control.dropDown.open).toBe(true);
+    });
+
+    it('1.44.6 destroy detaches the element once and is idempotent', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, { items: [{ value: 'a', label: 'A' }] });
+      expect(host.children).toContain(control.el);
+
+      control.destroy();
+
+      expect(host.children).not.toContain(control.el);
+      expect(() => control.destroy()).not.toThrow();
+    });
+  });
 });

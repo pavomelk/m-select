@@ -1,5 +1,5 @@
 import './m-select.css';
-import MSelect from './m-select.js';
+import MSelectFacade from './m-select-facade.js';
 import { inputExample } from '../project/input.example.js';
 
 const app = document.getElementById('app');
@@ -44,7 +44,7 @@ neighbor.append(neighborLabel, neighborInput);
 form.append(host, submit);
 app.append(heading, intro, form);
 
-const control = new MSelect(host, inputExample);
+const control = new MSelectFacade(host, inputExample);
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -54,7 +54,10 @@ form.addEventListener('submit', (event) => {
 
 const reflect = () => {
   state.textContent =
-    'selected values: ' + JSON.stringify(control.selectedItems.map((i) => i.value));
+    'selected values: ' +
+    JSON.stringify(control.values) +
+    '   mode: ' +
+    control.mode;
 };
 const timer = setInterval(reflect, 100);
 window.addEventListener('beforeunload', () => clearInterval(timer));

@@ -214,7 +214,7 @@
 - [ ] `REQ-6-01` The component supports configurable options defining details of its behaviour. *(P0)*
 - [ ] `REQ-6-02` It can be set up programmatically and updated at runtime. *(P0)*
 - [x] `REQ-6-03` Its values are submittable through form data. *(P0)* — hidden inputs are mirrored on the control's own element, so the enclosing `<form>` picks them up without a name-to-field API. See `REQ-7-08` for the encoding.
-- [ ] `REQ-6-04` Selection can be specified programmatically. *(P0)*
+- [x] `REQ-6-04` Selection can be specified programmatically. *(P0)* — at instantiation from `selected: true` flags or the `selectedValues` seed (REQ-7-20), and at runtime through the `selectedValues` setter (the symmetric write of the getter, in one settle) or the facade's `select`/`unselect`/`toggle`/`values`/`clear`/`selectAll` (see `REQ-6-02`).
 - [ ] `REQ-6-05` It invokes events when its state changes; events provide hooks (e.g. for hinting the user how to navigate the control). *(P0)*
 
 ---
