@@ -1,26 +1,40 @@
 export const inputExample = {
 	items: [
 		{ label: 'Alpha', value: 'alpha' },
-		{ label: 'Beta', value: 'beta', selectable: 'false' },
-		{ label: 'Kappa', value: 'kappa' },
+		{
+			label: 'Beta',
+			value: 'beta',
+			selectable: 'false',
+			tooltip: 'Shown for reference only - this one cannot be selected'
+		},
+		{
+			label: 'Kappa',
+			value: 'kappa',
+			tooltip: 'Kappa is selectable, unlike Beta'
+		},
 		{
 			label: 'Cities',
+			tooltip: 'A group - hovering the group title shows this, its children have their own',
 			items: [
-				{ label: 'Paris', value: 'paris' },
+				{ label: 'Paris', value: 'paris', tooltip: 'Capital of France' },
 				{ label: 'London', value: 'london' },
-				{ label: 'New-York', value: 'new-york' }
+				{ label: 'New-York', value: 'new-york', tooltip: 'Not the capital of the USA' }
 			]
 		},
 		{
 			label: 'Sandwich',
 			items: [
 				{ label: 'Tuna', value: 'tuna' },
-				{ label: 'Vegetables', value: 'just-grass' },
+				{
+					label: 'Vegetables',
+					value: 'just-grass',
+					tooltip: 'Vegan'
+				},
 				{ label: 'Egg', value: 'egg' }
 			]
 		},
 		{
-			label: 'Select All',
+			label: 'Levels',
 			items: [
 				{
 					label: 'Level 2',
@@ -86,7 +100,7 @@ export const inputExample = {
          * same roles are taken by ArrowUp/ArrowDown and ArrowLeft/ArrowRight.
          */
         align: {
-			// the children of every top-level Group (Cities, Sandwich, Select All)
+			// the children of every top-level Group (Cities, Sandwich, Levels)
 			// are a row; level 3 keeps its own row as well
 			1: { flow: 'row' },
 			3: 'row'

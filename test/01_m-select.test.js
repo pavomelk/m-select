@@ -209,6 +209,36 @@ describe('1. MSelect', () => {
       expect(item.chipView.classList.contains('cm-chip')).toBe(true);
       expect(item.buildChipView()).toBe(item.chipView);
     });
+
+    it('1.2.7 a tooltip is rendered as the native tooltip of the ItemView', () => {
+      const item = new Item(
+        { value: 'a', label: 'A', tooltip: 'The first letter' },
+        {},
+        0,
+        root
+      );
+      expect(item.itemView.title).toBe('The first letter');
+    });
+
+    it('1.2.8 a tooltip is rendered as the native tooltip of the ChipView', () => {
+      const item = new Item(
+        { value: 'a', label: 'A', tooltip: 'The first letter' },
+        {},
+        0,
+        root
+      );
+      expect(item.buildChipView().title).toBe('The first letter');
+    });
+
+    it('1.2.9 without a tooltip the ItemView carries no native tooltip', () => {
+      const item = new Item({ value: 'a', label: 'A' }, {}, 0, root);
+      expect(item.itemView.title).toBe('');
+    });
+
+    it('1.2.10 without a tooltip the ChipView carries no native tooltip either; label and tooltip stay separate', () => {
+      const item = new Item({ value: 'a', label: 'A' }, {}, 0, root);
+      expect(item.buildChipView().title).toBe('');
+    });
   });
 
   // requires: group Items (spec.items), child container element + classes,
@@ -321,7 +351,7 @@ describe('1. MSelect', () => {
 
       expect(control.selectionBox.chipsEl.children).toContain(item.chipView);
       expect(item.chipView.classList.contains('cm-chip')).toBe(true);
-      expect(item.chipView.title).toBe('A');
+      expect(item.chipView.children[0].textContent).toBe('A');
     });
 
     it('1.4.2 SelectionBox has add and remove methods for Items, rendering their chipView', () => {
@@ -1602,7 +1632,7 @@ expect(walks).toBe(0);
       c.toggle(true);
       control.selectionBox.render();
 
-      const labels = control.selectionBox.chipsEl.children.map((el) => el.title);
+      const labels = control.selectionBox.chipsEl.children.map((el) => el._item.label);
       expect(labels).toEqual(['Bravo', 'Alpha', 'Charlie']);
     });
 
@@ -1619,7 +1649,7 @@ expect(walks).toBe(0);
       c.toggle(true);
       control.selectionBox.render();
 
-      const labels = control.selectionBox.chipsEl.children.map((el) => el.title);
+      const labels = control.selectionBox.chipsEl.children.map((el) => el._item.label);
       expect(labels).toEqual(['Charlie', 'Alpha', 'Bravo']);
     });
 
@@ -1636,7 +1666,7 @@ expect(walks).toBe(0);
       a.toggle(true);
       control.selectionBox.render();
 
-      const labels = control.selectionBox.chipsEl.children.map((el) => el.title);
+      const labels = control.selectionBox.chipsEl.children.map((el) => el._item.label);
       expect(labels).toEqual(['Alpha', 'Bravo', 'Charlie']);
     });
 
@@ -1651,15 +1681,15 @@ expect(walks).toBe(0);
       c.toggle(true);
       a.toggle(true);
       control.selectionBox.render();
-      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Bravo', 'Charlie', 'Alpha']);
+      expect(control.selectionBox.chipsEl.children.map((el) => el._item.label)).toEqual(['Bravo', 'Charlie', 'Alpha']);
 
       control.setChipPlaceOrder('alphabetical');
       control.selectionBox.render();
-      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+      expect(control.selectionBox.chipsEl.children.map((el) => el._item.label)).toEqual(['Alpha', 'Bravo', 'Charlie']);
 
       control.setChipPlaceOrder('asDefined');
       control.selectionBox.render();
-      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Charlie', 'Alpha', 'Bravo']);
+      expect(control.selectionBox.chipsEl.children.map((el) => el._item.label)).toEqual(['Charlie', 'Alpha', 'Bravo']);
     });
 
     it('1.8.5 add() appends chipViews in "unsorted" (arrival) order', () => {
@@ -1674,7 +1704,7 @@ expect(walks).toBe(0);
       c.selected = true;
       control.selectionBox.add(c);
 
-      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Bravo', 'Alpha', 'Charlie']);
+      expect(control.selectionBox.chipsEl.children.map((el) => el._item.label)).toEqual(['Bravo', 'Alpha', 'Charlie']);
     });
 
     it('1.8.6 add() inserts chipViews in "alphabetical" position', () => {
@@ -1692,7 +1722,7 @@ expect(walks).toBe(0);
       b.selected = true;
       control.selectionBox.add(b);
 
-      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+      expect(control.selectionBox.chipsEl.children.map((el) => el._item.label)).toEqual(['Alpha', 'Bravo', 'Charlie']);
     });
 
     it('1.8.7 add() inserts chipViews in "asDefined" position', () => {
@@ -1710,7 +1740,7 @@ expect(walks).toBe(0);
       c.selected = true;
       control.selectionBox.add(c);
 
-      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Charlie', 'Alpha', 'Bravo']);
+      expect(control.selectionBox.chipsEl.children.map((el) => el._item.label)).toEqual(['Charlie', 'Alpha', 'Bravo']);
     });
 
     it('1.8.8 after a runtime switch, add() respects the new order for subsequent chips', () => {
@@ -1728,11 +1758,11 @@ expect(walks).toBe(0);
 
       control.setChipPlaceOrder('alphabetical');
       control.selectionBox.render();
-      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Bravo', 'Delta']);
+      expect(control.selectionBox.chipsEl.children.map((el) => el._item.label)).toEqual(['Bravo', 'Delta']);
 
       a.selected = true;
       control.selectionBox.add(a);
-      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Alpha', 'Bravo', 'Delta']);
+      expect(control.selectionBox.chipsEl.children.map((el) => el._item.label)).toEqual(['Alpha', 'Bravo', 'Delta']);
     });
 
     it('1.8.9 "asDefined" orders nested Items by their place in the whole tree, not their own level', () => {
@@ -1757,7 +1787,7 @@ expect(walks).toBe(0);
       });
       control.selectionBox.render();
 
-      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual([
+      expect(control.selectionBox.chipsEl.children.map((el) => el._item.label)).toEqual([
         'Lyon', 'Nice', 'Rome', 'Seine',
       ]);
     });
@@ -1781,7 +1811,7 @@ expect(walks).toBe(0);
 
       // Rome is defined first, so it stays first even though it sits at the top
       // level and Lyon is nested below a Group defined after it.
-      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual(['Rome', 'Lyon']);
+      expect(control.selectionBox.chipsEl.children.map((el) => el._item.label)).toEqual(['Rome', 'Lyon']);
     });
 
     it('1.8.11 the flat order is the array the whole component reads, and it holds every Item in tree order', () => {
@@ -1919,7 +1949,7 @@ expect(walks).toBe(0);
       });
       control.selectionBox.render();
 
-      expect(control.selectionBox.chipsEl.children.map((el) => el.title)).toEqual([
+      expect(control.selectionBox.chipsEl.children.map((el) => el._item.label)).toEqual([
         'Rome', 'Lyon', 'Oslo',
       ]);
     });
@@ -2340,7 +2370,7 @@ expect(walks).toBe(0);
       const control = triple();
       expect(control.dropDown.showSelectAllButton).toBe(false);
 
-      control.selectionBox.filter.query = 'alp';
+      control.selectionBox.filter.query = 'a';
 
       expect(control.dropDown.showSelectAllButton).toBe(true);
       expect(control.dropDown.selectAllBtn.style.display).not.toBe('none');
@@ -2391,18 +2421,43 @@ expect(walks).toBe(0);
 
     it('1.12.13 clicking select all clears the filter query and the visibility it imposed', () => {
       const control = triple();
-      control.selectionBox.filter.query = 'al';
+      control.selectionBox.filter.query = 'r';
       expect(control.dropDown.showSelectAllButton).toBe(true);
-      expect(control.items[0].visible).toBe(true);
-      expect(control.items[1].visible).toBe(false);
-      expect(control.items[2].visible).toBe(false);
+      expect(control.items[0].visible).toBe(false);
+      expect(control.items[1].visible).toBe(true);
+      expect(control.items[2].visible).toBe(true);
 
       control.dropDown.selectAllBtn.click();
 
       expect(control.selectionBox.filter.query).toBe('');
       expect(control.dropDown.showSelectAllButton).toBe(false);
       expect([...control.items].map((i) => i.visible)).toEqual([true, true, true]);
-      expect(states(control)).toEqual([true, false, false]);
+      expect(states(control)).toEqual([false, true, true]);
+    });
+
+    it('1.12.14 a filter leaving a single visible Item hides the select all button', () => {
+      const control = triple();
+
+      control.selectionBox.filter.query = 'alp';
+
+      expect(control.dropDown.showSelectAllButton).toBe(false);
+      expect(control.dropDown.selectAllBtn.style.display).toBe('none');
+    });
+
+    it('1.12.15 a filter leaving two or more visible Items keeps the select all button', () => {
+      const control = triple();
+
+      control.selectionBox.filter.query = 'r';
+
+      expect(control.dropDown.showSelectAllButton).toBe(true);
+    });
+
+    it('1.12.16 a filter matching nothing hides the select all button', () => {
+      const control = triple();
+
+      control.selectionBox.filter.query = 'zzz';
+
+      expect(control.dropDown.showSelectAllButton).toBe(false);
     });
   });
 
@@ -2636,6 +2691,40 @@ expect(walks).toBe(0);
       expect(control.items[0].visible).toBe(true);
       expect(control.items[1].visible).toBe(false);
       expect(control.items[2].visible).toBe(false);
+    });
+
+    it('1.13.14 the first input event opens a closed Drop Down at once, before the debounce', () => {
+      const control = setup();
+      vi.useFakeTimers();
+      try {
+        expect(control.dropDown.open).toBe(false);
+
+        control.selectionBox.filter.el.value = 'a';
+        control.selectionBox.filter.el.dispatchEvent({ type: 'input' });
+
+        expect(control.dropDown.open).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('1.13.15 every further input keeps the Drop Down open', () => {
+      const control = setup();
+
+      control.selectionBox.filter.el.value = 'a';
+      control.selectionBox.filter.el.dispatchEvent({ type: 'input' });
+      control.selectionBox.filter.el.value = 'al';
+      control.selectionBox.filter.el.dispatchEvent({ type: 'input' });
+
+      expect(control.dropDown.open).toBe(true);
+    });
+
+    it('1.13.16 assigning the query programmatically does not open the Drop Down by itself', () => {
+      const control = setup();
+
+      control.selectionBox.filter.query = 'a';
+
+      expect(control.dropDown.open).toBe(false);
     });
 
     // A text query re-filters the list, and that is also the moment the Current
@@ -3635,7 +3724,7 @@ expect(walks).toBe(0);
       expect(modes(control).mode).toBe('dropdown');
     });
 
-    it('1.19.3 ArrowDown with the DropDown already open enters DropDown mode with the marker left as-is', () => {
+    it('1.19.3 ArrowDown in Filter mode applies the list movement to an existing marker, entering DropDown mode on the next visible Item', () => {
       const control = setup();
       control.dropDown.open = true;
       control.items[1].toggle(true);
@@ -3644,18 +3733,31 @@ expect(walks).toBe(0);
       keydown(control.selectionBox.filter.el, 'ArrowDown');
 
       expect(isOpen(control)).toBe(true);
-      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
       expect(modes(control).mode).toBe('dropdown');
     });
 
-    it('1.19.4 ArrowDown respects the filter and enters DropDown mode: with only matching Items visible, the first visible one is Current', () => {
+    it('1.19.4 ArrowDown respects the filter and enters DropDown mode: with no marker set, the first visible one is Current', () => {
       const control = setup();
-      control.selectionBox.filter.query = 'a'; // visible: Alpha, Charlie
+      control.selectionBox.filter.query = 'r'; // visible: Bravo, Charlie
+      control.dropDown.clearCurrent();
 
       keydown(control.selectionBox.filter.el, 'ArrowDown');
 
       expect(isOpen(control)).toBe(true);
-      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(modes(control).mode).toBe('dropdown');
+    });
+
+    it('1.19.5 ArrowDown after a query walks the marker the query left standing on to the next visible Item', () => {
+      const control = setup();
+      control.selectionBox.filter.query = 'r'; // re-homes the marker to Bravo
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+
+      keydown(control.selectionBox.filter.el, 'ArrowDown');
+
+      expect(isOpen(control)).toBe(true);
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
       expect(modes(control).mode).toBe('dropdown');
     });
   });
@@ -4142,7 +4244,7 @@ expect(walks).toBe(0);
         return control;
       };
       const chipLabels = (control) =>
-        control.selectionBox.chipsEl.children.map((el) => el.title);
+        control.selectionBox.chipsEl.children.map((el) => el._item.label);
 
       it('1.21.16 the array selects the Items it names, in the order it names them', () => {
         const control = seeded(['e', 'o', 'r']);
@@ -5463,7 +5565,7 @@ expect(walks).toBe(0);
       keydown(control.selectionBox.filter.el, 'ArrowDown');
 
       expect(modes(control).mode).toBe('dropdown');
-      expect(control.dropDown.currentItem).toBe(control.items[0]);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
     });
 
     it('1.30.18 a Chip/Collapsed normalize that already reached Filter does not re-run it', () => {
@@ -7551,6 +7653,529 @@ expect(walks).toBe(0);
           ],
         })
       ).toThrow(/Duplicate item value/);
+    });
+  });
+
+  // requires: options.name, the cm-form container on MSelect#el, and
+  // #syncFormValues() run from the selection settle, render and setItems
+  describe('43. Form submission', () => {
+    const formEl = (control) =>
+      control.el.children.find((el) => el.classList.contains('cm-form'));
+    const formInputs = (control) => {
+      const el = formEl(control);
+      return el ? el.children : [];
+    };
+    const formPairs = (control) => formInputs(control).map((i) => [i.name, i.value]);
+
+    const build = (options, items) => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        options,
+        items: items || [
+          { value: 'a', label: 'A' },
+          { value: 'b', label: 'B' },
+          { value: 'c', label: 'C' },
+        ],
+      });
+    };
+
+    it('1.43.1 without a name the control contributes no form field', () => {
+      const control = build({});
+      control.items[0].toggle(true);
+
+      expect(formEl(control)).toBeUndefined();
+      expect(formInputs(control)).toHaveLength(0);
+    });
+
+    it('1.43.2 a selected Item becomes one hidden input named verbatim by options.name', () => {
+      const control = build({ name: 'mselect' });
+      control.items[0].toggle(true);
+
+      expect(formPairs(control)).toEqual([['mselect', 'a']]);
+      expect(formInputs(control)[0].type).toBe('hidden');
+    });
+
+    it('1.43.3 one input per selected Item, in selectedValues (arrival) order', () => {
+      const control = build({ name: 'mselect' });
+      control.items[1].toggle(true);
+      control.items[0].toggle(true);
+
+      expect(formPairs(control)).toEqual([
+        ['mselect', 'b'],
+        ['mselect', 'a'],
+      ]);
+    });
+
+    it('1.43.4 unselecting an Item removes its input', () => {
+      const control = build({ name: 'mselect' });
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      control.items[0].toggle(false);
+
+      expect(formPairs(control)).toEqual([['mselect', 'b']]);
+    });
+
+    it('1.43.5 unselectItem (the Chip "x") updates the submitted values', () => {
+      const control = build({ name: 'mselect' });
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+
+      control.unselectItem(control.items[0]);
+
+      expect(formPairs(control)).toEqual([['mselect', 'b']]);
+    });
+
+    it('1.43.6 clearAll empties the form fields', () => {
+      const control = build({ name: 'mselect' });
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+
+      control.clearAll();
+
+      expect(formInputs(control)).toHaveLength(0);
+    });
+
+    it('1.43.7 toggleAll submits every selectable Item', () => {
+      const control = build({ name: 'mselect' });
+      control.toggleAll();
+
+      expect(formPairs(control)).toEqual([
+        ['mselect', 'a'],
+        ['mselect', 'b'],
+        ['mselect', 'c'],
+      ]);
+    });
+
+    it('1.43.8 a delayed setItems seed populates the fields in seed order', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { name: 'mselect', delayedLoad: true },
+      });
+
+      control.setItems(
+        [
+          { value: 'a', label: 'A' },
+          { value: 'b', label: 'B' },
+        ],
+        ['b', 'a']
+      );
+
+      expect(formPairs(control)).toEqual([
+        ['mselect', 'b'],
+        ['mselect', 'a'],
+      ]);
+    });
+
+    it('1.43.9 a collapsed selection still submits every selected value, not just the summary', () => {
+      const control = build({ name: 'mselect', maxVisibleChips: 1 });
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+
+      expect(control.selectionBox.isCollapsed).toBe(true);
+      expect(formPairs(control)).toEqual([
+        ['mselect', 'a'],
+        ['mselect', 'b'],
+      ]);
+    });
+
+    it('1.43.10 the Filter input carries no name, so it is not submitted', () => {
+      const control = build({ name: 'mselect' });
+      expect(control.selectionBox.filter.el.name).toBeFalsy();
+    });
+
+    it('1.43.11 a comma in a value is submitted verbatim and warned about once', () => {
+      const warn = vi.spyOn(specLog, 'warn').mockImplementation(() => {});
+      const control = build({ name: 'mselect' }, [{ value: 'a,b', label: 'Comma' }]);
+
+      control.items[0].toggle(true);
+
+      expect(formPairs(control)).toEqual([['mselect', 'a,b']]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain('comma');
+
+      control.render();
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+    });
+
+    it('1.43.12 without a name, a comma in a value does not warn (there is no submission to corrupt)', () => {
+      const warn = vi.spyOn(specLog, 'warn').mockImplementation(() => {});
+      const control = build({}, [{ value: 'a,b', label: 'Comma' }]);
+
+      control.items[0].toggle(true);
+
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+  });
+
+  // requires: a selectedValues setter (batched re-selection, the runtime
+  // counterpart of the setItems seed), a public mode getter, and destroy()
+  describe('44. Runtime selection, mode read and teardown', () => {
+    const build = (config = {}, options) => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: config.items || [
+          { value: 'a', label: 'A' },
+          { value: 'b', label: 'B' },
+          { value: 'c', label: 'C' },
+        ],
+        options,
+      });
+    };
+
+    it('1.44.1 the selectedValues setter states the selection in the array order', () => {
+      const control = build();
+      control.items[2].toggle(true);
+
+      control.selectedValues = ['b', 'a'];
+
+      expect(control.selectedValues).toEqual(['b', 'a']);
+      expect(control.items[2].selected).toBe(false);
+    });
+
+    it('1.44.2 the setter is lenient: unknown values are skipped with a warning', () => {
+      const warn = vi.spyOn(specLog, 'warn').mockImplementation(() => {});
+      const control = build();
+
+      control.selectedValues = ['a', 'nope'];
+
+      expect(control.selectedValues).toEqual(['a']);
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+    });
+
+    it('1.44.3 a non-array seed throws and leaves the selection untouched', () => {
+      const control = build();
+      control.items[0].toggle(true);
+
+      expect(() => {
+        control.selectedValues = 'a';
+      }).toThrow(/array/);
+      expect(control.selectedValues).toEqual(['a']);
+    });
+
+    it('1.44.4 mode reports the active input mode', () => {
+      const control = build();
+      expect(control.mode).toBe('filter');
+
+      control.dropDown.open = true;
+      control.onKeyDown({ key: 'ArrowDown', preventDefault() {} });
+
+      expect(control.mode).toBe('dropdown');
+    });
+
+    it('1.44.5 destroy detaches the document listeners it registered', () => {
+      const control = build();
+      control.dropDown.open = true;
+      document.dispatchEvent({ type: 'mousedown', target: document.body });
+      expect(control.dropDown.open).toBe(false);
+
+      control.dropDown.open = true;
+      control.destroy();
+      document.dispatchEvent({ type: 'mousedown', target: document.body });
+      expect(control.dropDown.open).toBe(true);
+    });
+
+    it('1.44.6 destroy detaches the element once and is idempotent', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, { items: [{ value: 'a', label: 'A' }] });
+      expect(host.children).toContain(control.el);
+
+      control.destroy();
+
+      expect(host.children).not.toContain(control.el);
+      expect(() => control.destroy()).not.toThrow();
+    });
+  });
+
+  // requires: Filter-mode Enter/ArrowDown handing the same key to DropDown mode
+  // after switching, so the commit and movement rules are shared, not copied.
+  describe('45. Keyboard - Enter in Filter mode commits the Current Item', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes.mode;
+    const key = (control, keyName) => {
+      const prevented = { value: false };
+      control.selectionBox.filter.el.dispatchEvent({
+        type: 'keydown',
+        key: keyName,
+        target: control.selectionBox.filter.el,
+        preventDefault() {
+          prevented.value = true;
+        },
+      });
+      return prevented;
+    };
+
+    it('1.45.1 Enter with a Current Item toggles it, closes the DropDown and returns to Filter mode', () => {
+      const control = setup();
+      control.dropDown.open = true;
+      control.dropDown.setCurrent(control.items[1]);
+
+      const prevented = key(control, 'Enter');
+
+      expect(control.items[1].selected).toBe(true);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control)).toBe('filter');
+      expect(control.dropDown.currentItem).toBeNull();
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.45.2 Enter after typing toggles the first match the query left Current and keeps the query', () => {
+      const control = setup();
+      vi.useFakeTimers();
+      try {
+        const el = control.selectionBox.filter.el;
+        el.value = 'r';
+        el.dispatchEvent({ type: 'input' });
+        vi.advanceTimersByTime(300);
+
+        expect(control.dropDown.open).toBe(true);
+        expect(control.dropDown.currentItem).toBe(control.items[1]);
+
+        const prevented = key(control, 'Enter');
+
+        expect(control.items[1].selected).toBe(true);
+        expect(control.dropDown.open).toBe(false);
+        expect(modes(control)).toBe('filter');
+        expect(control.selectionBox.filter.query).toBe('r');
+        expect(prevented.value).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('1.45.3 Enter with no Current Item closes the DropDown and selects nothing', () => {
+      const control = setup();
+      control.dropDown.open = true;
+      control.dropDown.clearCurrent();
+
+      const prevented = key(control, 'Enter');
+
+      expect(control.selectionBox.items).toHaveLength(0);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control)).toBe('filter');
+      expect(prevented.value).toBe(true);
+    });
+
+    it('1.45.4 Enter is consumed even with no Current Item and a closed DropDown, so a surrounding form does not submit', () => {
+      const control = setup();
+      expect(control.dropDown.open).toBe(false);
+
+      const prevented = key(control, 'Enter');
+
+      expect(prevented.value).toBe(true);
+      expect(control.selectionBox.items).toHaveLength(0);
+      expect(control.dropDown.open).toBe(false);
+      expect(modes(control)).toBe('filter');
+    });
+  });
+
+  // requires: a settled selection change emits once after the Chips, the list
+  // and the form mirror are up to date, with the values that entered and left.
+  describe('46. Selection change events', () => {
+    const DEFAULT_ITEMS = [
+      { value: 'a', label: 'Alpha' },
+      { value: 'b', label: 'Bravo' },
+      { value: 'c', label: 'Charlie' },
+    ];
+    const setup = (items, options) => {
+      const host = document.createElement('div');
+      return new MSelect(host, { items: items || DEFAULT_ITEMS, options });
+    };
+    const collect = (control) => {
+      const seen = [];
+      control.el.addEventListener('cm-selection-change', (e) =>
+        seen.push({ type: e.type, detail: e.detail })
+      );
+      return seen;
+    };
+    const xOf = (item) =>
+      item.chipView.children.find((el) => el.classList.contains('cm-chip__x'));
+
+    it('1.46.1 toggling an Item emits one cm-selection-change with the value that entered', () => {
+      const control = setup();
+      const seen = collect(control);
+
+      control.items[1].itemView.click();
+
+      expect(seen).toEqual([
+        {
+          type: 'cm-selection-change',
+          detail: { values: ['b'], added: ['b'], removed: [] },
+        },
+      ]);
+    });
+
+    it('1.46.2 toggling it off reports the value that left', () => {
+      const control = setup();
+      control.items[1].toggle(true);
+      const seen = collect(control);
+
+      control.items[1].itemView.click();
+
+      expect(seen).toEqual([
+        {
+          type: 'cm-selection-change',
+          detail: { values: [], added: [], removed: ['b'] },
+        },
+      ]);
+    });
+
+    it('1.46.3 removing a Chip reports the removed value', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      const seen = collect(control);
+
+      xOf(control.items[0]).click();
+
+      expect(seen).toEqual([
+        {
+          type: 'cm-selection-change',
+          detail: { values: [], added: [], removed: ['a'] },
+        },
+      ]);
+    });
+
+    it('1.46.4 a settle that changes nothing emits nothing', () => {
+      const control = setup();
+      const seen = collect(control);
+
+      control.unselectItem(control.items[0]);
+      control.clearAll();
+
+      expect(seen).toEqual([]);
+    });
+
+    it('1.46.5 toggleAll emits once for the whole bulk change', () => {
+      const control = setup();
+      const seen = collect(control);
+
+      control.toggleAll();
+
+      expect(seen).toEqual([
+        {
+          type: 'cm-selection-change',
+          detail: { values: ['a', 'b', 'c'], added: ['a', 'b', 'c'], removed: [] },
+        },
+      ]);
+    });
+
+    it('1.46.6 clearAll emits once with every value that left', () => {
+      const control = setup();
+      control.toggleAll();
+      const seen = collect(control);
+
+      control.clearAll();
+
+      expect(seen).toEqual([
+        {
+          type: 'cm-selection-change',
+          detail: { values: [], added: [], removed: ['a', 'b', 'c'] },
+        },
+      ]);
+    });
+
+    it('1.46.7 the selectedValues setter reports the values that entered', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      const seen = collect(control);
+
+      control.selectedValues = ['c', 'a'];
+
+      expect(seen).toEqual([
+        {
+          type: 'cm-selection-change',
+          detail: { values: ['c', 'a'], added: ['c'], removed: [] },
+        },
+      ]);
+    });
+
+    it('1.46.8 setItems reports the resolved seed in its own order', () => {
+      const control = setup(undefined, { delayedLoad: true });
+      const seen = collect(control);
+
+      control.setItems(
+        [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+        ],
+        ['b', 'a']
+      );
+
+      expect(seen).toEqual([
+        {
+          type: 'cm-selection-change',
+          detail: { values: ['b', 'a'], added: ['b', 'a'], removed: [] },
+        },
+      ]);
+    });
+
+    it('1.46.9 a Group toggle settles once for the whole cascade', () => {
+      const control = setup([
+        {
+          label: 'Group',
+          items: [
+            { value: 'x', label: 'X' },
+            { value: 'y', label: 'Y' },
+          ],
+        },
+      ]);
+      const seen = collect(control);
+
+      control.items[0].itemView.click();
+
+      expect(seen).toEqual([
+        {
+          type: 'cm-selection-change',
+          detail: { values: ['x', 'y'], added: ['x', 'y'], removed: [] },
+        },
+      ]);
+
+      control.items[0].itemView.click();
+
+      expect(seen).toHaveLength(2);
+      expect(seen[1].detail).toEqual({
+        values: [],
+        added: [],
+        removed: ['x', 'y'],
+      });
+    });
+
+    it('1.46.10 a reported values array is a snapshot, not a live view', () => {
+      const control = setup();
+      const seen = collect(control);
+
+      control.items[0].toggle(true);
+      const first = seen[0].detail.values;
+      control.items[1].toggle(true);
+
+      expect(first).toEqual(['a']);
+      expect(seen[1].detail.values).toEqual(['a', 'b']);
+    });
+
+    it('1.46.11 a reorder-only change reports the new order and nothing entering or leaving', () => {
+      const control = setup();
+      control.selectedValues = ['a', 'b'];
+      const seen = collect(control);
+
+      control.selectedValues = ['b', 'a'];
+
+      expect(seen).toEqual([
+        {
+          type: 'cm-selection-change',
+          detail: { values: ['b', 'a'], added: [], removed: [] },
+        },
+      ]);
     });
   });
 });

@@ -19,6 +19,15 @@ const MODES = Object.freeze({
 });
 
 /**
+ * Returned by a handler that switched the mode and wants the same key processed
+ * again by the new mode's handler. `Modes#processKey` re-reads the handler once
+ * after this, so a key can be owned by the mode it hands over to without the two
+ * handlers duplicating each other's rule.
+ * @private
+ */
+export const REDISPATCH = Symbol('redispatch');
+
+/**
  * Number of Items PageDown/PageUp move by within the marker's own level. A
  * fixed approximation until the DropDown exposes viewport metrics.
  * @private
@@ -66,11 +75,19 @@ const startMarker = (control) => {
  *   Chips present it switches to Chip mode with the rightmost Chip marked
  *   Current (or to Collapsed mode with the Collapsed Chip marked Current when
  *   the selection is collapsed). In every other case the key is left to the
- * - ArrowDown enters DropDown mode, marking the first visible Item Current
- *   when no marker is set: a closed DropDown opens first; an already-open
- *   DropDown without a marker (the mouse-open path) gets one here, so list
- *   navigation starts on the very first ArrowDown. An existing marker is
- *   left as-is.
+ *   input's default text-caret navigation.
+ *
+ * - ArrowDown enters DropDown mode and hands the same press to that mode's own
+ *   ArrowDown handler: a closed DropDown opens first, and the marker is taken
+ *   from where the list stands — started on the first visible Item when none is
+ *   set, moved on to the next one when a re-filter left one standing. The first
+ *   ArrowDown therefore does what every later one does, instead of marking an
+ *   Item and asking for a second press to step off it.
+ *
+ * - Enter likewise hands the same press to DropDown mode's Enter handler: it
+ *   toggles the Current Item when there is one, closes the DropDown and returns
+ *   to Filter mode. With no Current Item it selects nothing and still closes;
+ *   the key is always consumed, so it cannot submit an enclosing form.
  *
  * - Backspace behaves like text-editing insert mode and only takes over when
  *   the caret sits at the text's leftmost position (nothing left to delete in
@@ -99,10 +116,13 @@ export function filterMode(control) {
     },
     handlers: {
       ArrowDown: () => {
-        startMarker(control);
         control.dropDown.open = true;
         control.switchMode(MODES.DROPDOWN);
-        return true;
+        return REDISPATCH;
+      },
+      Enter: () => {
+        control.switchMode(MODES.DROPDOWN);
+        return REDISPATCH;
       },
       ArrowLeft: () => {
         if (control.selectionBox.filter.query !== '') return false;

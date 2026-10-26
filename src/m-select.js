@@ -15,7 +15,7 @@ const LOG_LEVELS = ['silent', 'error', 'warn', 'info', 'debug'];
 const PRESET_SELECTION_LIMIT = 50;
 const PRESET_MAX_VISIBLE_CHIPS = 25;
 
-import { MODES, filterMode, dropdownMode, chipMode, collapsedMode } from './modes.js';
+import { MODES, REDISPATCH, filterMode, dropdownMode, chipMode, collapsedMode } from './modes.js';
 
 /**
  * Simple built-in logger with configurable verbosity.
@@ -354,6 +354,7 @@ export class Item {
   /**
    * @param {object} spec
    * @param {object[]} spec.items child item specs
+   * @param {string} [spec.tooltip] native tooltip text for the Item and its Chip
    * @param {object} [options] component options (e.g. `align` per level)
    * @param {number} [definitionIndex] position in the owning container's flat
    *   order. Only a starting value: the container renumbers every Item of a
@@ -370,6 +371,13 @@ export class Item {
     }
     this.options = options;
     this.label = spec.label;
+    /**
+     * Native tooltip text (REQ-3.2-07). Rendered on the Item view and, when a
+     * Chip is built, on the Chip view. Kept separate from the label: without a
+     * tooltip there is none, on either view.
+     * @type {string|undefined}
+     */
+    this.tooltip = spec.tooltip;
     this.value = normalizeValue(spec.value);
     this.selectable = normalizeBool(spec.selectable);
     warnOnSpec(spec, this.value, this.selectable);
@@ -1072,8 +1080,16 @@ export class Item {
     }
 
     if (this.isGroup) {
-      for (const child of this) {
-        child.toggle(after);
+      const cascade = () => {
+        for (const child of this) {
+          child.toggle(after);
+        }
+      };
+      // One settle for the whole subtree, not one per descendant (REQ-9-05).
+      if (this.owner) {
+        this.owner.withSelectionBatch(cascade);
+      } else {
+        cascade();
       }
       return this.selected;
     }
@@ -1128,6 +1144,10 @@ export class Item {
       if (this.owner) this.owner.onItemViewClick(this, e);
     });
 
+    if (this.tooltip !== undefined && this.tooltip !== null) {
+      li.title = this.tooltip;
+    }
+
     this.itemView = li;
   }
 
@@ -1144,7 +1164,9 @@ export class Item {
 
     const chip = document.createElement('span');
     chip.className = 'cm-chip';
-    chip.title = this.label;
+    if (this.tooltip !== undefined && this.tooltip !== null) {
+      chip.title = this.tooltip;
+    }
     chip._item = this;
 
     const chipLabel = document.createElement('span');
@@ -1290,6 +1312,10 @@ export class Filter {
 
   /** Debounced event handler of the input element. */
   onInput() {
+    // Changing the query is itself a wish to see the list, so reveal it at the
+    // first keystroke rather than waiting for the debounce below. Opening is
+    // idempotent, so typing on while it is already open costs nothing.
+    this.control.dropDown.open = true;
     clearTimeout(this.#debounceTimer);
     this.#displaySelected = false;
     this.#debounceTimer = setTimeout(() => {
@@ -1800,7 +1826,6 @@ class DropDown {
    */
   filter(textValue, matchFn) {
     const query = String(textValue || '');
-    this.showSelectAllButton = query !== '';
     const q = query.toLowerCase();
     const customMatcher = typeof matchFn === 'function';
     const matcher = matchFn || ((item) => item.label.toLowerCase().includes(q));
@@ -1824,6 +1849,15 @@ class DropDown {
     };
 
     apply(this.control.items);
+
+    // Select All is a flat action over the visible selectable Leaves. With fewer
+    // than two of them there is nothing to bulk-select: it would repeat a single
+    // Item's toggle, or do nothing at all, so the button stays hidden.
+    const visibleLeaves = this.control.items.selectableItems.filter(
+      (item) => item.visible
+    ).length;
+    this.showSelectAllButton = query !== '' && visibleLeaves > 1;
+
     this.control.render();
   }
 
@@ -1979,12 +2013,20 @@ class Modes {
 
   /**
    * Routes an input event to the active mode's handler for the event's key.
+   * A handler that switched the mode may return REDISPATCH to hand the same
+   * event to the new mode's handler; the lookup is then repeated once, so a key
+   * is owned by the mode it was handed over to rather than by two rules.
    * @param {Event} event
    * @returns {unknown} the handler's result, or false when unhandled
    */
   processKey(event) {
-    const fn = (this.#definitions.get(this.#current)?.handlers || {})[event?.key];
-    return fn ? fn(event) : false;
+    let result = false;
+    for (let pass = 0; pass < 2; pass += 1) {
+      const fn = (this.#definitions.get(this.#current)?.handlers || {})[event?.key];
+      result = fn ? fn(event) : false;
+      if (result !== REDISPATCH) break;
+    }
+    return result;
   }
 }
 
@@ -2017,10 +2059,20 @@ class Modes {
  *   (`MODES.FILTER`, `MODES.DROPDOWN`, `MODES.CHIP`, `MODES.COLLAPSED`). Fired
  *   only for real transitions; assigning the already active mode (e.g.
  *   re-entering Filter while Filter is active) is a no-op and stays silent.
+ *
+ * @typedef {CustomEvent<{values: unknown[], added: unknown[], removed: unknown[]}>} CmSelectionChangeEvent
+ *   Detail: `{ values, added, removed }` — the selection after the change in
+ *   Chip order, the values that entered it and the ones that left. Fired once
+ *   per settled selection change, after the Chips, the visible list and the form
+ *   mirror are up to date; a bulk change (`toggleAll()`, `clearAll()`, assigning
+ *   `selectedValues`, a Group toggle) fires it once, and a settle that moves
+ *   nothing fires nothing. A reorder alone fires with both lists empty.
  */
 
 /**
- * The component.
+ * The component. Application code should build a value-based `MSelectFacade`
+ * over it rather than reach into its internals; this class is exported for the
+ * facade, tests, and advanced composition.
  */
 export class MSelect {
   /**
@@ -2061,8 +2113,12 @@ export class MSelect {
 
     this.selectionBox.el.addEventListener('click', (e) => this.#onSelectionBoxClick(e));
     this.el.addEventListener('mousedown', (e) => this.#onControlMouseDown(e));
-    document.addEventListener('mousedown', (e) => this.#onDocumentMouseDown(e));
-    document.addEventListener('keydown', (e) => this.#onDocumentKeyDown(e));
+    // Stored rather than inlined so destroy() can detach them: these are the
+    // listeners that outlive the element and would keep the instance reachable.
+    this.#docMousedown = (e) => this.#onDocumentMouseDown(e);
+    this.#docKeydown = (e) => this.#onDocumentKeyDown(e);
+    document.addEventListener('mousedown', this.#docMousedown);
+    document.addEventListener('keydown', this.#docKeydown);
 
     if (!this.options.delayedLoad) this.setItems(config.items);
 
@@ -2072,6 +2128,13 @@ export class MSelect {
 
   /** @private internal input-mode state machine, wired in the constructor, exposed only via MSELECT_INTERNALS */
   #modes;
+
+  /** @private document-level handler references, so destroy() can detach them */
+  #docMousedown;
+  #docKeydown;
+
+  /** @private guard so destroy() runs its teardown once */
+  #destroyed = false;
 
   /** @private Whether the Item tree was already instantiated (setItems one-time). */
   #itemsLoaded = false;
@@ -2359,6 +2422,9 @@ export class MSelect {
    * control.el.addEventListener('cm-mode-change', ({ detail }) => {
    *   console.log(`mode ${detail.from} -> ${detail.to}`);
    * });
+   * control.el.addEventListener('cm-selection-change', ({ detail }) => {
+   *   console.log(detail.values, `+${detail.added}`, `-${detail.removed}`);
+   * });
    * control.el.addEventListener('cm-dropdown-open', () => console.log('open'));
    * ```
    * @param {string} type one of the `cm-*` event types listed above
@@ -2463,11 +2529,13 @@ export class MSelect {
       }
     });
     this.selectionBox.render();
+    this.#syncFormValues();
     this.#normalizeMode();
 
     if (this.options.delayedLoad) {
       this.emit('cm-items-set', { count: this.allItems.length });
     }
+    this.#emitSelectionChange();
     return this;
   }
 
@@ -2608,6 +2676,78 @@ export class MSelect {
   }
 
   /**
+   * States the whole selection at runtime from an array of Item values. The
+   * runtime counterpart of the `selectedValues` seed accepted by `setItems`, and
+   * its symmetric write: same lenient resolution (a value naming no Item, a
+   * Group or a repeat is warned about and skipped, REQ-7-20) and the same order,
+   * so the Chips arrive in the array's order. A non-array argument throws before
+   * anything is changed, leaving the selection untouched. Unlike `setItems` it
+   * may be called any number of times and never rebuilds the Item tree
+   * (REQ-6-04). The change is settled once, so a large selection costs one
+   * render rather than one per Item (REQ-9-05).
+   * @param {unknown[]} values the selection, as Item values in Chip order
+   */
+  set selectedValues(values) {
+    // Resolved first: a bad argument must not leave a half-stated selection.
+    const seeded = this.#resolveSelectedValues(values);
+    this.#inBatch(() => {
+      this.#applySeed(seeded);
+      this.selectionBox.clear();
+      for (const item of seeded) this.selectionBox.add(item);
+    });
+    this.dropDown.clearCurrent();
+    this.render();
+    this.#normalizeMode();
+    this.#emitSelectionChange();
+  }
+
+  /** @private Hidden-input container for form submission; created on first need. */
+  #formEl = null;
+
+  /** @private Values already warned about the comma delimiter; warn once each. */
+  #commaWarned = new Set();
+
+  /**
+   * @private Mirrors the selection into hidden inputs on `MSelect#el`, so the
+   * selected values submit with the enclosing `<form>` (REQ-6-03, REQ-7-08). One
+   * input per selected Item, named verbatim by `options.name` and emitted in
+   * `selectedValues` order, so `FormData`/`URLSearchParams` carry repeated
+   * entries (`name=v&name=w`) for the server to join. Without a name the control
+   * takes no part in submission.
+   *
+   * The order matches the Chips, not the document: a seed order survives, so
+   * what submits is what `selectedValues` reports. A value containing the comma
+   * the server joins on is submitted as-is but warned about once, because it
+   * cannot be told apart from a separator once joined.
+   */
+  #syncFormValues() {
+    const name = this.options.name;
+    if (!name) return;
+    if (!this.#formEl) {
+      this.#formEl = document.createElement('div');
+      this.#formEl.className = 'cm-form';
+      this.el.append(this.#formEl);
+    }
+    this.#formEl.innerHTML = '';
+    for (const item of this.selectionBox.items) {
+      const value = String(item.value);
+      if (value.includes(',') && !this.#commaWarned.has(value)) {
+        this.#commaWarned.add(value);
+        specLog.warn(
+          `Item "${item.label}": value ${JSON.stringify(value)} contains a comma, ` +
+            `but "${name}" submits as repeated entries the server joins with commas, ` +
+            'so the value cannot be told apart after the join.'
+        );
+      }
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = value;
+      this.#formEl.append(input);
+    }
+  }
+
+  /**
    * Chips ordered per `chipPlaceOrder`.
    *
    * `unsorted` is the order the Chips arrived in the box, the most recently
@@ -2687,29 +2827,66 @@ export class MSelect {
    * visible again, and keeping the marker on it is the documented behaviour.
    */
   #settleAfterSelectionChange() {
+    this.#syncFormValues();
     this.#syncVisibleList();
     this.#normalizeMode();
 
     if (
-      this.#modes.mode !== MODES.DROPDOWN ||
-      !this.selectionBox.filter.displaySelected
+      this.#modes.mode === MODES.DROPDOWN &&
+      this.selectionBox.filter.displaySelected
     ) {
-      return;
+      const stranded = this.dropDown.currentItem;
+      if (stranded && !stranded.navigable) {
+        // The Item just left the list, so the walk is asked for its successor in
+        // the list that is left, and it is asked the way a toggled Item is
+        // answered: by its next sibling. Toggling a Group is an act on the Group
+        // itself, so its subtree is already accounted for and is stepped over
+        // rather than walked into. With no next sibling the answer is the Item
+        // that is then the last, which is the question the axis is asked - and
+        // on a column the children of a Group share its line, so the last one of
+        // them is that answer while on a row they stand off the line and the
+        // Group itself is. Every hop filters on `navigable`, which is what makes
+        // "next visible" the walk's own answer rather than a separate lookup.
+        this.dropDown.setCurrent(
+          stranded.nextInLevel() ?? stranded.previousInAxis()
+        );
+      }
     }
-    const stranded = this.dropDown.currentItem;
-    if (!stranded || stranded.navigable) return;
 
-    // The Item just left the list, so the walk is asked for its successor in the
-    // list that is left, and it is asked the way a toggled Item is answered: by
-    // its next sibling. Toggling a Group is an act on the Group itself, so its
-    // subtree is already accounted for and is stepped over rather than walked
-    // into. With no next sibling the answer is the Item that is then the last,
-    // which is the question the axis is asked - and on a column the children of
-    // a Group share its line, so the last one of them is that answer while on a
-    // row they stand off the line and the Group itself is. Every hop filters on
-    // `navigable`, which is what makes "next visible" the walk's own answer
-    // rather than a separate lookup.
-    this.dropDown.setCurrent(stranded.nextInLevel() ?? stranded.previousInAxis());
+    this.#emitSelectionChange();
+  }
+
+  /**
+   * @private The selection as reported by the last `cm-selection-change`.
+   */
+  #selectionSnapshot = [];
+
+  /**
+   * @private Emits `cm-selection-change` when the selection has moved since the
+   * last report. `values` is the whole selection in Chip order; `added` holds
+   * the values that entered it and `removed` the ones that left, each in the
+   * order of the array it comes from. A change that only reorders the selection
+   * is reported too, with both lists empty, because the order is part of what
+   * the Chips show. A settle that moves nothing emits nothing, so the event
+   * marks changes a reader would notice rather than internal re-renders.
+   * @fires CmSelectionChangeEvent
+   */
+  #emitSelectionChange() {
+    const values = this.selectedValues;
+    const previous = this.#selectionSnapshot;
+    const unchanged =
+      values.length === previous.length &&
+      values.every((value, index) => value === previous[index]);
+    if (unchanged) return;
+
+    const before = new Set(previous);
+    const after = new Set(values);
+    this.#selectionSnapshot = values;
+    this.emit('cm-selection-change', {
+      values: [...values],
+      added: values.filter((value) => !before.has(value)),
+      removed: previous.filter((value) => !after.has(value)),
+    });
   }
 
   /**
@@ -2761,6 +2938,24 @@ export class MSelect {
   }
 
   /**
+   * Runs a change over a subtree as one settle: the leaves report themselves
+   * while the per-Item settling is suspended, then the Chips, the list and the
+   * form are brought up to date once and one `cm-selection-change` is emitted.
+   * A Group Item's own toggle cascade uses this, so a click on a Group costs one
+   * settle rather than one per descendant (REQ-9-05). Called inside a change
+   * that is already bulk, it joins that change instead of settling early.
+   * @param {() => void} fn
+   */
+  withSelectionBatch(fn) {
+    if (this.batching) {
+      fn();
+      return;
+    }
+    this.#inBatch(fn);
+    this.#settleAfterSelectionChange();
+  }
+
+  /**
    * Runs a bulk selection change with the per-Item settling and the SelectionBox's
    * per-Item collapse bookkeeping suspended, leaving one render and settle for the
    * caller to do at the end. Without it a change touching N Items settles N times
@@ -2791,6 +2986,7 @@ export class MSelect {
     this.dropDown.clearCurrent();
     this.render();
     this.#normalizeMode();
+    this.#emitSelectionChange();
   }
 
   toggleAll() {
@@ -2799,6 +2995,7 @@ export class MSelect {
     this.#inBatch(() => this.dropDown.items.toggle());
     this.selectionBox.filter.query = '';
     this.render();
+    this.#emitSelectionChange();
   }
 
   /* ---- selection interaction ---- */
@@ -2845,6 +3042,30 @@ export class MSelect {
   render() {
     this.dropDown.render();
     this.selectionBox.render();
+    this.#syncFormValues();
+  }
+
+  /**
+   * The active input mode name: `filter`, `dropdown`, `chip` or `collapsed`.
+   * @returns {string}
+   */
+  get mode() {
+    return this.#modes.mode;
+  }
+
+  /**
+   * Tears the control down: detaches the document-level listeners registered in
+   * the constructor — the only ones that outlive the element and would otherwise
+   * keep the instance reachable — and removes the control's element from the
+   * page. Idempotent. Prefer it over dropping the reference; use
+   * `MSelectFacade#destroy()` from application code.
+   */
+  destroy() {
+    if (this.#destroyed) return;
+    this.#destroyed = true;
+    document.removeEventListener('mousedown', this.#docMousedown);
+    document.removeEventListener('keydown', this.#docKeydown);
+    this.el.remove();
   }
 }
 
