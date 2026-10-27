@@ -296,6 +296,9 @@ export function dropdownMode(control) {
       Enter: () => {
         const current = control.dropDown.currentItem;
         if (current) current.toggle();
+        if (control.selectionBox?.filter) {
+          control.selectionBox.filter.query = '';
+        }
         control.leaveDropDown('Enter');
         return true;
       },
