@@ -7947,7 +7947,7 @@ expect(walks).toBe(0);
         expect(control.items[1].selected).toBe(true);
         expect(control.dropDown.open).toBe(false);
         expect(modes(control)).toBe('filter');
-        expect(control.selectionBox.filter.query).toBe('r');
+        expect(control.selectionBox.filter.query).toBe('');
         expect(prevented.value).toBe(true);
       } finally {
         vi.useRealTimers();

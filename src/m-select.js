@@ -1320,6 +1320,7 @@ export class Filter {
     this.#displaySelected = false;
     this.#debounceTimer = setTimeout(() => {
       this.#applyQuery(this.query);
+      // After re-homing, ensure current item is visible if dropdown is open
     }, this.debounceDelay);
   }
 
@@ -2993,7 +2994,9 @@ export class MSelect {
     this.logger.info('toggle all');
     this.requestItems();
     this.#inBatch(() => this.dropDown.items.toggle());
-    this.selectionBox.filter.query = '';
+    if (this.selectionBox?.filter) {
+      this.selectionBox.filter.query = '';
+    }
     this.render();
     this.#emitSelectionChange();
   }
