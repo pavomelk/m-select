@@ -49,6 +49,10 @@ const hideCaret = (control) => {
 /** Escape is a universal cancel key: it dismisses the DropDown in every mode. */
 const closeDropDown = (control) => {
   control.dropDown.open = false;
+  // Return focus to the filter input so Tab/Escape doesn't leave focus stranded elsewhere
+  try {
+    control.selectionBox?.filter?.el?.focus?.();
+  } catch (e) {}
   return true;
 };
 
