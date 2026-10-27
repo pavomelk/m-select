@@ -2392,6 +2392,7 @@ export class MSelect {
     this.dropDown.open = false;
     try {
       if (key === 'Escape') {
+        this.selectionBox?.filter?.el?.readOnly = false;
         this.selectionBox?.filter?.el?.focus?.();
       }
     } catch (e) {}
