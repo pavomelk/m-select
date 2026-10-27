@@ -140,6 +140,14 @@ class ElementStub {
     return node;
   }
 
+  get parentNode() {
+    return this._parent || null;
+  }
+
+  remove() {
+    if (this._parent) this._parent.removeChild(this);
+  }
+
   /**
    * Nearest ancestor (or self) matching a selector. Only single-class
    * selectors like ".cm-chip" are supported; anything else (e.g. a bare class

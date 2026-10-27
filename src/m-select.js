@@ -15,7 +15,7 @@ const LOG_LEVELS = ['silent', 'error', 'warn', 'info', 'debug'];
 const PRESET_SELECTION_LIMIT = 50;
 const PRESET_MAX_VISIBLE_CHIPS = 25;
 
-import { MODES, filterMode, dropdownMode, chipMode, collapsedMode } from './modes.js';
+import { MODES, REDISPATCH, filterMode, dropdownMode, chipMode, collapsedMode } from './modes.js';
 
 /**
  * Simple built-in logger with configurable verbosity.
@@ -53,6 +53,64 @@ export class Logger {
 }
 
 const normalizeBool = (value) => value !== false && String(value) !== 'false';
+
+/**
+ * Reads an Item's `value`, treating `null`, `undefined` and the empty string as
+ * the absence of a value rather than as values in their own right. An Item with
+ * no value is not selectable (REQ-3.2-05) and owns no Chip, so it would be wrong
+ * for `value: ''` to slip through as a value and produce one; the same absence
+ * is what duplicate detection skips (REQ-7-21). `0` and `false` are real values
+ * and are kept.
+ * @param {*} value
+ * @returns {*} the value, or `undefined` when there is none
+ */
+const normalizeValue = (value) =>
+  value === undefined || value === null || value === '' ? undefined : value;
+
+/**
+ * Logs warnings for an Item spec that says something the component cannot take
+ * literally. Deliberately permissive - a spec is not rejected for a spelling the
+ * component can read correctly - but loud enough to catch an author who thinks
+ * they have turned a selection off and have not.
+ *
+ * `selectable` is meant to be a boolean. The string `'false'` is still honoured
+ * (an HTML attribute or URL parameter arrives as a string), so it warns no more
+ * than `false` does; a value that is neither boolean nor read as false - `0`,
+ * `'FALSE'`, `'yes'` - is the case worth reporting, because the author's intent
+ * and the component's reading have parted ways. A flag read as true on an Item
+ * with no value warns too: there is nothing to select, so the flag promises
+ * something the Item cannot deliver. `selectable: false` on a valueless Item is
+ * not reported - it says the same thing the missing value already does.
+ * @param {object} spec the Item spec as authored
+ * @param {*} value the normalized value
+ * @param {boolean} selectable the reading the component settled on
+ */
+const warnOnSpec = (spec, value, selectable) => {
+  if (spec.selectable === undefined) return;
+  if (typeof spec.selectable !== 'boolean' && selectable) {
+    specLog.warn(
+      `Item "${spec.label}": "selectable" should be a boolean, but ${JSON.stringify(
+        spec.selectable
+      )} is being read as true. Use true or false.`
+    );
+  }
+  if (value === undefined && selectable) {
+    specLog.warn(
+      `Item "${spec.label}": "selectable" is set, but the Item has no value, ` +
+        'so there is nothing to select. Give it a value or drop the flag.'
+    );
+  }
+};
+
+/**
+ * Logger for spec-authoring warnings, kept separate from a component's own
+ * `logger` because an Item is built before its control exists and has no logger
+ * to report to. It defaults to `warn`, not `silent`, so a mistake in the spec
+ * is visible without having to turn logging on; a component constructed with an
+ * explicit `logLevel` sets this to match, so `logLevel: 'silent'` still quiets
+ * it. Exported so tests can observe the warnings.
+ */
+export const specLog = new Logger('warn');
 
 /**
  * Resolves the layout of a single hierarchy level out of the `align` option.
@@ -104,6 +162,46 @@ export class RootContainer {
   /** @private array of registered top-level Items (mirrored by numeric keys). */
   #children = [];
 
+  /**
+   * Every Item under this container in tree order, depth-first, maintained
+   * rather than recomputed. An Item's place in this array is its `definitionIndex`,
+   * which is what `chipPlaceOrder: 'asDefined'` sorts by.
+   *
+   * It is kept in step at exactly two moments, and both are here: `add()` for a
+   * subtree registered at runtime, and `#indexSubtree()` for the build. Anything
+   * that changes the shape of the tree later - an `Item.append()` placed between
+   * siblings, say - has to splice its subtree in at the right offset and renumber
+   * from there, or the array and `definitionIndex` will describe a tree that is no
+   * longer the one on screen. That is the one obligation this array creates.
+   * @private
+   */
+  #all = [];
+
+  /**
+   * Appends an Item's subtree to the maintained flat order and gives every Item
+   * in it its `definitionIndex`.
+   * @private
+   * @param {Item} item root of the subtree
+   * @param {number} [at] position to splice at; appended when omitted
+   * @returns {Item[]} the Items added, in the order they now hold
+   */
+  #indexSubtree(item, at) {
+    const added = [];
+    const walk = (node) => {
+      added.push(node);
+      for (const child of node) walk(child);
+    };
+    walk(item);
+    const start = at === undefined ? this.#all.length : at;
+    this.#all.splice(start, 0, ...added);
+    // Renumbering from the splice point keeps every position before it untouched,
+    // which is what makes an insertion at the front as cheap as one at the end.
+    for (let i = start; i < this.#all.length; i += 1) {
+      this.#all[i].definitionIndex = i;
+    }
+    return added;
+  }
+
   /** Number of registered top-level Items. */
   get length() {
     return this.#children.length;
@@ -114,7 +212,12 @@ export class RootContainer {
     return this.#children[Symbol.iterator]();
   }
 
-  /** Registers the given top-level Item under the next numeric key. */
+  /**
+   * Registers the given top-level Item under the next numeric key, and its
+   * subtree in the flat order.
+   * @param {Item} item
+   * @returns {Item} the Item
+   */
   add(item) {
     const index = this.#children.length;
     this.#children.push(item);
@@ -123,27 +226,85 @@ export class RootContainer {
       configurable: true,
       enumerable: true,
     });
+    this.#indexSubtree(item);
     return item;
   }
 
-  /** Depth-first flattening of all option Items under this container. */
-  flatten() {
+  /**
+   * Registers a subtree at a chosen place in the tree instead of at the end,
+   * for a tree whose shape is decided after the build. `before` is the top-level
+   * Item the new one goes in front of; omitted means the end, which is `add()`.
+   *
+   * This exists so the one obligation the maintained array creates has a single
+   * place to be met: the child list, the flat order and `definitionIndex` are all
+   * brought into line in one call, because a tree changed in one of them and not
+   * the others is worse than no maintenance at all.
+   *
+   * Top-level only. Nesting an Item inside an existing Group is a different
+   * operation - it also has to recount the visibility and selection counters up
+   * the chain of parents - so it belongs to an `Item` method of its own rather
+   * than being folded in here.
+   * @param {Item} item top-level Item to insert
+   * @param {Item} [before] the top-level Item to insert in front of
+   * @returns {Item[]} the Items inserted, in their new order
+   */
+  insertBefore(item, before) {
+    if (before === undefined) return this.#indexSubtree(this.add(item));
+    const childAt = this.#children.indexOf(before);
+    if (childAt < 0) {
+      throw new Error('insertBefore: the reference Item is not a top-level Item of this container');
+    }
+    const flatAt = this.#all.indexOf(before);
+    this.#children.splice(childAt, 0, item);
+    this.#indexTopLevelKeys();
+    // The constructor attached the itemView to the end of the element, so it is
+    // moved to where it now belongs in the tree.
+    this.element.insertBefore(item.itemView, before.itemView);
+    return this.#indexSubtree(item, flatAt);
+  }
+
+  /** @private Rebinds the numeric keys after the child list is reordered. */
+  #indexTopLevelKeys() {
+    this.#children.forEach((child, index) => {
+      Object.defineProperty(this, index, {
+        get: () => this.#children[index],
+        configurable: true,
+        enumerable: true,
+      });
+    });
+  }
+
+  /**
+   * Walks the tree and returns the flat order it ought to hold, so a test can
+   * hold the maintained array against the definition it implements. Not on the
+   * hot path - the array exists so that production code never has to do this.
+   * @returns {Item[]}
+   */
+  recountOrder() {
     const result = [];
     const walk = (node) => {
       result.push(node);
-      for (const child of node) {
-        walk(child);
-      }
+      for (const child of node) walk(child);
     };
-    for (const child of this) {
-      walk(child);
-    }
+    for (const child of this.#children) walk(child);
     return result;
   }
 
-  /** All option Items (in tree order) that are selectable and carry a value. */
+  /**
+   * Every Item under this container in tree order. The maintained array itself,
+   * not a copy of it: reading it is on the hot path of a chip render, and the
+   * list it describes cannot disagree with the tree because it is updated by the
+   * same calls that change the tree. Callers that need to sort or splice it must
+   * copy first - which is why `orderedChips()` does.
+   * @returns {Item[]}
+   */
+  flatten() {
+    return this.#all;
+  }
+
+  /** All leaf option Items (in tree order) that are selectable and carry a value. */
   get selectableItems() {
-    return this.flatten().filter((item) => item.selectable && item.value !== undefined);
+    return this.#all.filter((item) => !item.isGroup && item.isSelectable);
   }
 
   /**
@@ -193,8 +354,12 @@ export class Item {
   /**
    * @param {object} spec
    * @param {object[]} spec.items child item specs
+   * @param {string} [spec.tooltip] native tooltip text for the Item and its Chip
    * @param {object} [options] component options (e.g. `align` per level)
-   * @param {number} [definitionIndex]
+   * @param {number} [definitionIndex] position in the owning container's flat
+   *   order. Only a starting value: the container renumbers every Item of a
+   *   subtree when it registers that subtree, so a nested Item ends up with its
+   *   real place in the whole tree rather than the 0 it would otherwise keep.
    * @param {RootContainer|Item} parent required owning container or Item
    */
   constructor(spec = {}, options = {}, definitionIndex = 0, parent) {
@@ -206,25 +371,99 @@ export class Item {
     }
     this.options = options;
     this.label = spec.label;
-    this.value = spec.value;
+    /**
+     * Native tooltip text (REQ-3.2-07). Rendered on the Item view and, when a
+     * Chip is built, on the Chip view. Kept separate from the label: without a
+     * tooltip there is none, on either view.
+     * @type {string|undefined}
+     */
+    this.tooltip = spec.tooltip;
+    this.value = normalizeValue(spec.value);
     this.selectable = normalizeBool(spec.selectable);
+    warnOnSpec(spec, this.value, this.selectable);
 
     this.definitionIndex = definitionIndex;
     this.isGroup = false;
-    this.selected = Boolean(spec.selected);
-    this.#visible = spec.visible === undefined ? true : Boolean(spec.visible);
+    // Before the flag below, which walks the chain of parents to report itself.
     this.parent = parent;
     this.owner = null;
     this.itemView = null;
     this.chipView = null;
+    this.#visible = spec.visible === undefined ? true : Boolean(spec.visible);
 
     this.element = document.createElement('div');
     this.element.className = 'cm-item__children';
 
     this.#adopt((spec.items || []).map((child) => new Item(child, options, 0, this)));
+    // The flag is authored on the Item it names, and the two kinds read it
+    // differently: on a Leaf it is that Item's own selection, while on a Group
+    // it stands for the whole subtree and so selects the selectable descendants.
+    // Either way the Group's own flag is left to `selectedCount` to answer.
+    if (this.isGroup) {
+      if (spec.selected) this.#selectSubtree();
+    } else {
+      this.selected = Boolean(spec.selected);
+    }
     this.#createDOM();
     this.attachToParent();
     this.syncView();
+  }
+
+  /** @private The flag itself; read through `selected`, which knows its kind. */
+  #selected = false;
+
+  /**
+   * Selection flag of a Leaf Item - whether this Item is one of the selected
+   * ones, and so owns a Chip and counts towards `selectedItems`. Assigning to it
+   * is the only way this state changes, which is what lets the enclosing Groups
+   * be answered from `selectedCount` rather than from a flag of their own: every
+   * write lands here, and every write is reported up the chain.
+   *
+   * On a Group Item the flag is derived - it says whether anything below is
+   * selected - so assigning to it changes nothing. A Group is a container, not a
+   * selection of its own: it owns no Chip, `selectedItems` leaves it out, and its
+   * `selected: true` spec flag is shorthand for its selectable descendants.
+   * @param {boolean} value
+   */
+  set selected(value) {
+    if (this.isGroup) return;
+    const after = Boolean(value);
+    if (after === this.#selected) return;
+    // A Leaf that cannot be selected is not part of any count, so its flag moves
+    // nothing above it.
+    const delta = this.isSelectable ? (after ? 1 : -1) : 0;
+    this.#selected = after;
+    // The visible-and-picked count follows the same write, but only while this
+    // Leaf is reachable - a pick made behind a filter is not part of what a
+    // toggle reads until the filter lets it back in.
+    const visibleDelta = delta && this.#visible ? delta : 0;
+    for (let group = this.parentItem; group; group = group.parentItem) {
+      group.#selectedCount += delta;
+      group.#visibleSelectedCount += visibleDelta;
+      group.#selected = group.#selectedCount > 0;
+    }
+  }
+
+  /** @returns {boolean} */
+  get selected() {
+    return this.#selected;
+  }
+
+  /**
+   * Selects every selectable descendant, which is what a `selected: true` flag on
+   * a Group asks for. Children are already built and have applied their own flags,
+   * so the walk only writes the ones left out - and so a nested Group's flag has
+   * already been honoured by the time its parent reaches it.
+   * @private
+   */
+  #selectSubtree() {
+    for (const child of this.#children) {
+      if (child.isGroup) {
+        child.#selectSubtree();
+      } else if (child.isSelectable) {
+        child.selected = true;
+      }
+    }
   }
 
   /**
@@ -252,6 +491,26 @@ export class Item {
   #adopt(children) {
     this.#children = children;
     this.isGroup = children.length > 0;
+    this.#selectableCount = this.isGroup
+      ? children.reduce((sum, child) => sum + child.selectableCount, 0)
+      : this.isSelectable
+        ? 1
+        : 0;
+    // Summing the children's own answers rather than walking the leaves again:
+    // a child built from `visible: false` already knows it is hidden, because
+    // its flag is read before its parent's `#adopt` runs.
+    this.#visibleSelectableCount = this.isGroup
+      ? children.reduce((sum, child) => sum + child.visibleSelectableCount, 0)
+      : this.isSelectable && this.#visible
+        ? 1
+        : 0;
+    // Both counters are summed from the children rather than walked. The Leaf's
+    // own `selected` flag is applied by the constructor only after this runs, and
+    // it reports up the chain as it goes, so a preset pick is counted without
+    // this needing to know about it.
+    this.#visibleSelectedCount = this.isGroup
+      ? children.reduce((sum, child) => sum + child.visibleSelectedCount, 0)
+      : 0;
     children.forEach((child, index) => {
       Object.defineProperty(this, index, {
         get: () => this.#children[index],
@@ -283,13 +542,39 @@ export class Item {
 
   /**
    * Whether the Item is rendered in the DropDown. The setter adjusts the
-   * `cm-item--hidden` class of the Item's `itemView`.
+   * `cm-item--hidden` class of the Item's `itemView`, and reports the change
+   * up the chain of parents so `visibleSelectableCount` stays true.
+   *
+   * Only a write that actually changes the flag reports anything: setting an
+   * Item to the visibility it already has moves no count, which is what keeps
+   * a filter pass - which assigns to every Item in the tree - from inflating
+   * the counters it is meant to be updating.
    * @param {boolean} value
    */
   set visible(value) {
-    this.#visible = Boolean(value);
+    const after = Boolean(value);
+    if (after === this.#visible) {
+      if (this.itemView) {
+        this.itemView.classList.toggle('cm-item--hidden', !after);
+      }
+      return;
+    }
+    this.#visible = after;
     if (this.itemView) {
-      this.itemView.classList.toggle('cm-item--hidden', !this.#visible);
+      this.itemView.classList.toggle('cm-item--hidden', !after);
+    }
+    // A Group is a container: its own visibility says nothing about what it
+    // holds, and its descendants keep the flags they were given. A Leaf that
+    // cannot be selected is out of a toggle's reach, so it is out of these
+    // counts too - it moves nothing above it.
+    if (this.isGroup || !this.isSelectable) return;
+    const delta = after ? 1 : -1;
+    // A Leaf that was already picked joins the visible-and-picked count as it
+    // comes back into reach, and leaves it as it goes out.
+    const pickedDelta = this.#selected ? delta : 0;
+    for (let group = this.parentItem; group; group = group.parentItem) {
+      group.#visibleSelectableCount += delta;
+      group.#visibleSelectedCount += pickedDelta;
     }
   }
 
@@ -573,29 +858,113 @@ export class Item {
     return this.parentItem ? this.parentItem.nextInLevel() : null;
   }
 
+  /**
+   * How many selectable descendants this Item holds. Counted once while the tree
+   * is built and read from there on: it answers from the shape of the tree, which
+   * `setItems` sets once and nothing changes afterwards.
+   * @returns {number}
+   */
   get selectableCount() {
-    if (!this.isGroup) {
-      return this.isSelectable ? 1 : 0;
-    }
-    let sum = 0;
-    for (const child of this) {
-      sum += child.selectableCount;
-    }
-    return sum;
+    return this.#selectableCount;
   }
 
+  /** @private backing field for selectableCount */
+  #selectableCount = 0;
+
+  /**
+   * How many selectable descendant Leaves are currently visible - the
+   * population a toggle under `groupItems.toggleScope: 'visible'` reaches.
+   * Kept up to date by `visible`, which walks up from the Leaf whose flag
+   * changed, mirroring how `selected` maintains `selectedCount`.
+   *
+   * Visibility is per-Item and not inherited: a hidden Group keeps counting the
+   * descendants that are themselves visible, because that is the flag a toggle
+   * reads when it reaches each child.
+   *
+   * The count deliberately ignores selection. `visibleSelectedCount` is the
+   * other half of the pair, and together they let `#everythingSelected` answer
+   * from two reads instead of a walk.
+   * @returns {number}
+   */
+  get visibleSelectableCount() {
+    if (!this.isGroup) return this.isSelectable && this.#visible ? 1 : 0;
+    return this.#visibleSelectableCount;
+  }
+
+  /** @private backing field for visibleSelectableCount */
+  #visibleSelectableCount = 0;
+
+  /**
+   * How many selectable descendant Leaves are both visible and selected - the
+   * part of the population a toggle reaches that is already picked.
+   *
+   * Paired with `visibleSelectableCount` it answers the tri-state question in
+   * two reads, which is why it cannot be read off `selectedCount`: a picked
+   * child that the filter has hidden is still in `selectedCount` and is not in
+   * what the user can currently see or reach.
+   *
+   * Maintained by both `visible` and `selected`, since either flag moving a
+   * Leaf in or out of the visible population moves it in or out of this one.
+   * @returns {number}
+   */
+  get visibleSelectedCount() {
+    if (!this.isGroup) return this.isSelectable && this.#visible && this.#selected ? 1 : 0;
+    return this.#visibleSelectedCount;
+  }
+
+  /** @private backing field for visibleSelectedCount */
+  #visibleSelectedCount = 0;
+
+  /**
+   * Walks this subtree and returns what its visibility counters ought to say,
+   * so a test can hold the maintained counts against the definition they
+   * implement. Not on the hot path: the counters exist so that production code
+   * never has to do this.
+   * @returns {{visibleSelectable: number, visibleSelected: number}}
+   */
+  recountVisibility() {
+    let visibleSelectable = 0;
+    let visibleSelected = 0;
+    const walk = (item) => {
+      for (const child of item) walk(child);
+      if (item.isGroup) return;
+      if (!item.isSelectable || !item.visible) return;
+      visibleSelectable += 1;
+      if (item.selected) visibleSelected += 1;
+    };
+    walk(this);
+    return { visibleSelectable, visibleSelected };
+  }
+
+  /**
+   * How many selectable descendants of this Item are selected. Kept up to date by
+   * `selected`, which walks up from the Leaf whose flag changed, so that reading
+   * it - from the group tick, from `inSelection`, from a selection count - costs
+   * nothing and a long tree is not walked per read. A Leaf answers for itself.
+   * @returns {number}
+   */
   get selectedCount() {
-    if (!this.isGroup) {
-      return this.selected && this.isSelectable ? 1 : 0;
-    }
-    let sum = 0;
-    for (const child of this) {
-      sum += child.selectedCount;
-    }
-    return sum;
+    if (!this.isGroup) return this.#selected && this.isSelectable ? 1 : 0;
+    return this.#selectedCount;
   }
 
-  /** Selection state used for the group tick: none | partial | all. */
+  /** @private backing field for selectedCount, the count of a Group */
+  #selectedCount = 0;
+
+  /**
+   * Selection state used for the group tick: none | partial | all.
+   *
+   * It deliberately ignores visibility, and this is the one place where the
+   * tick and the tri-state of `#everythingSelected` answer different questions.
+   * The tick reports the Group as a whole: "all" means every selectable
+   * descendant is selected, which stays false while any of them is unselected,
+   * whether or not it is currently on screen. The tri-state answers what a
+   * click would do, and acts only on what the user can reach. So a Group whose
+   * visible children are all picked can read *partial* here while a click on it
+   * clears rather than selects again. Both are right about their own question.
+   *
+   * @returns {'none' | 'partial' | 'all'}
+   */
   get selectionState() {
     const total = this.selectableCount;
     if (total === 0) return 'none';
@@ -607,18 +976,23 @@ export class Item {
 
   /**
    * Whether this Item belongs to the current selection, and so to a
-   * selected-Items-only list. A Group qualifies through what it holds rather
-   * than through its own `selected` flag: that flag is set when the Group is
-   * toggled as a whole and then survives unselecting its children one by one, so
-   * asking it alone would keep an emptied Group in the list. A Group carrying a
-   * value is its own Chip, so it qualifies on its flag even with no children.
+   * selected-Items-only list. A Group qualifies through what it holds: it is on
+   * the list as the path to its selected descendants, and it is off it once the
+   * last of them goes. There is no flag of its own to fall back on, so an emptied
+   * Group cannot linger.
    */
   get inSelection() {
     if (!this.isGroup) return this.selected;
-    return this.selectedCount > 0 || (this.selected && this.value !== undefined);
+    return this.#selectedCount > 0;
   }
 
-  /** Depth-first flattening of this Item's children (and their descendants). */
+  /**
+   * This Item's children and their descendants, in tree order, computed on the
+   * spot. Only a subtree of this Item is meaningful here, and the maintained
+   * array on the root holds the whole tree rather than arbitrary slices of it,
+   * so this stays a walk - it is the root's `flatten()` that the hot paths use.
+   * @returns {Item[]}
+   */
   flatten() {
     const result = [];
     const walk = (node) => {
@@ -633,14 +1007,47 @@ export class Item {
     return result;
   }
 
-  /** All descendants that are selectable and carry a value. */
+  /** All selectable descendant leaves, which are the ones that can own a Chip. */
   get selectableItems() {
-    return this.flatten().filter((i) => i.selectable && i.value !== undefined);
+    return this.flatten().filter((i) => !i.isGroup && i.isSelectable);
+  }
+
+  /**
+   * Whether every selectable descendant a Group's cascade would reach is
+   * selected - which is what makes an unprompted `toggle()` on a Group the
+   * tri-state act its tick invites: fully selected clears, anything short of
+   * that selects the rest.
+   *
+   * It is asked over the population the cascade actually acts on rather than
+   * over the whole subtree, because `groupItems.toggleScope` decides that
+   * population: under `'visible'` a hidden child is out of reach, so it neither
+   * needs selecting nor counts towards the whole. The tick is the one answer that
+   * speaks for the whole subtree, which is why the two can disagree and why this
+   * is not read off the tick.
+   *
+   * This is the toggle question, not the filtering one: what a click reaches
+   * over the population the current filter left visible. Which children the
+   * filter leaves visible is `groupItems.filterScope`'s separate answer.
+   * @returns {boolean}
+   */
+  #everythingSelected() {
+    const scope = (this.options.groupItems || {}).toggleScope || 'visible';
+    if (scope === 'all') {
+      return this.selectableCount > 0 && this.selectedCount === this.selectableCount;
+    }
+    const total = this.visibleSelectableCount;
+    return total > 0 && this.visibleSelectedCount === total;
   }
 
   /**
    * Changes the selection state. Non-selectable Items (leaf without value)
    * cannot be toggled into "Selected".
+   *
+   * A Group Item is a container, so it has no selection of its own to change:
+   * `toggle()` hands the state it decided to its children and answers with what
+   * they left behind, which `selectedCount` holds. The state it decides is
+   * asked of `#everythingSelected`, so a partly selected Group takes the click
+   * as a request for the rest of it rather than as a request to clear.
    *
    * Calling protocol:
    * - `toggle()` flips this Item's own state; a Group Item then hands the
@@ -648,7 +1055,10 @@ export class Item {
    * - `toggle(state)` is the child side of that cascade: this Item decides on
    *   its own whether it follows, per `groupItems.toggleScope`:
    *   - `'all'`: follows regardless of visibility.
-   *   - `'visible'` (default): follows only while visible.
+   *   - `'visible'` (default): follows only while visible, so a filtered-down
+   *     drop down selects the Items that fit the query rather than the whole
+   *     subtree. Unrelated to `groupItems.filterScope`, which decides what the
+   *     query leaves visible in the first place.
    * An Item that decides to follow cascades the state further down, letting
    * each of its own children decide in turn.
    * @param {boolean} [state] target state handed down by this Item's parent
@@ -658,23 +1068,33 @@ export class Item {
     if (!this.isSelectable) return this.selected;
 
     const prompted = state !== undefined;
-    const after = prompted ? Boolean(state) : !this.selected;
-
+    let after;
     if (prompted) {
+      after = Boolean(state);
       const scope = (this.options.groupItems || {}).toggleScope || 'visible';
       if (!(scope === 'all' || (scope === 'visible' && this.visible))) {
         return this.selected;
       }
+    } else {
+      after = this.isGroup ? !this.#everythingSelected() : !this.selected;
+    }
+
+    if (this.isGroup) {
+      const cascade = () => {
+        for (const child of this) {
+          child.toggle(after);
+        }
+      };
+      // One settle for the whole subtree, not one per descendant (REQ-9-05).
+      if (this.owner) {
+        this.owner.withSelectionBatch(cascade);
+      } else {
+        cascade();
+      }
+      return this.selected;
     }
 
     this.selected = after;
-
-    if (this.isGroup) {
-      for (const child of this) {
-        child.toggle(after);
-      }
-    }
-
     if (this.owner) {
       this.owner.onItemToggled(this);
     }
@@ -724,6 +1144,10 @@ export class Item {
       if (this.owner) this.owner.onItemViewClick(this, e);
     });
 
+    if (this.tooltip !== undefined && this.tooltip !== null) {
+      li.title = this.tooltip;
+    }
+
     this.itemView = li;
   }
 
@@ -740,7 +1164,9 @@ export class Item {
 
     const chip = document.createElement('span');
     chip.className = 'cm-chip';
-    chip.title = this.label;
+    if (this.tooltip !== undefined && this.tooltip !== null) {
+      chip.title = this.tooltip;
+    }
     chip._item = this;
 
     const chipLabel = document.createElement('span');
@@ -870,15 +1296,31 @@ export class Filter {
   set query(value) {
     this.el.value = String(value || '');
     this.#displaySelected = false;
-    this.control.dropDown.filter(this.el.value);
+    this.#applyQuery(this.el.value);
+  }
+
+  /**
+   * Single owner of the text-query path, shared by assigning `query` and by the
+   * debounced input handler: re-filters the DropDown by the query and re-homes the
+   * Current marker to the list it just produced, so the two cannot drift apart.
+   * @param {string} textValue
+   */
+  #applyQuery(textValue) {
+    this.control.dropDown.filter(textValue);
+    this.control.dropDown.rehomeCurrent();
   }
 
   /** Debounced event handler of the input element. */
   onInput() {
+    // Changing the query is itself a wish to see the list, so reveal it at the
+    // first keystroke rather than waiting for the debounce below. Opening is
+    // idempotent, so typing on while it is already open costs nothing.
+    this.control.dropDown.open = true;
     clearTimeout(this.#debounceTimer);
     this.#displaySelected = false;
     this.#debounceTimer = setTimeout(() => {
-      this.control.dropDown.filter(this.query);
+      this.#applyQuery(this.query);
+      // After re-homing, ensure current item is visible if dropdown is open
     }, this.debounceDelay);
   }
 
@@ -904,11 +1346,34 @@ export class Filter {
 
 /** Always-visible part of the control: chips + filter + clear-all. */
 /** The summary chip shown when the selection count exceeds `maxVisibleChips`. */
+/**
+ * The single Chip standing for a collapsed selection: a count of what it stands
+ * for, and the same "(x)" removal area any other Chip has, which removes the whole
+ * selection rather than one Item.
+ *
+ * It owns no Item, and so cannot carry the logical Current marker, which only ever
+ * stands on an Item. Its `current` is its own: a marking that makes it look like the
+ * Current Chip while the interaction is on it, which is why opening the DropDown
+ * from here seeds the marker on an Item instead.
+ */
 class CollapsedChip {
   constructor() {
     this.chipView = document.createElement('span');
     this.chipView.className = 'cm-chip cm-chip--summary';
-    this.chipView.title = 'Individual items must be unselected via the dropdown';
+    this.chipView.title = 'Unselects every selected item';
+
+    // The count sits in a span of its own so that it and the "x" do not share one
+    // text node - the same shape an individual Chip's markup has.
+    this.labelEl = document.createElement('span');
+    this.labelEl.textContent = '0 items selected';
+
+    this.xEl = document.createElement('button');
+    this.xEl.className = 'cm-chip__x';
+    this.xEl.title = 'Remove';
+    this.xEl.textContent = '\u00d7';
+    this.xEl.tabIndex = -1;
+
+    this.chipView.append(this.labelEl, this.xEl);
   }
 
   /** @private backing field for the current property */
@@ -931,7 +1396,7 @@ class CollapsedChip {
 
   /** Refreshes the label from the given number of selected Items. */
   update(count) {
-    this.chipView.textContent = `${count} items selected`;
+    this.labelEl.textContent = `${count} items selected`;
   }
 }
 
@@ -942,7 +1407,6 @@ class SelectionBox {
   constructor(control) {
     this.control = control;
     this.items = [];
-    this.chips = [];
     this.el = document.createElement('div');
     this.el.className = 'cm-selection';
     this.chipsEl = document.createElement('div');
@@ -975,17 +1439,34 @@ class SelectionBox {
     return this.#collapsed;
   }
 
+  /**
+   * Whether the selection is small enough for the individual Chips to be shown,
+   * which is the boundary `#updateCollapsedState` draws: a selection larger than
+   * `maxVisibleChips` is collapsed, one of that size or smaller is not.
+   *
+   * This is deliberately not `isCollapsed`. That one holds an achieved collapse
+   * for as long as the interaction is anchored on it, so it stays true through a
+   * count that has fallen back within the limit - which is the point of the hold,
+   * but makes it useless for asking whether the collapse still applies.
+   * @returns {boolean}
+   */
+  get withinChipLimit() {
+    const max = this.control.options.maxVisibleChips;
+    return max == null || this.control.selectedItems.length <= max;
+  }
+
   /** Recomputes the displayed collapse state from the selection count. */
   #updateCollapsedState() {
     this.#ensureCollapsedChip();
-    const max = this.control.options.maxVisibleChips;
-    if (max == null) {
+    if (this.control.options.maxVisibleChips == null) {
       this.#collapsed = false;
       return;
     }
-    const count = this.control.selectedItems.length;
     this.#collapsed =
-      count > max || (this.#collapsed && count > 0 && this.control.holdsCollapse);
+      !this.withinChipLimit ||
+      (this.#collapsed &&
+        this.control.selectedItems.length > 0 &&
+        this.control.holdsCollapse);
   }
 
   /**
@@ -1007,6 +1488,7 @@ class SelectionBox {
   add(item) {
     if (this.items.includes(item)) return;
     this.items.push(item);
+    if (this.control.batching) return;
     this.#updateCollapsedState();
 
     if (this.isCollapsed) {
@@ -1016,7 +1498,7 @@ class SelectionBox {
       return;
     }
 
-    this.chips.push(item.ensureChipView());
+    item.ensureChipView();
     const list = this.control.orderedChips();
     const index = list.indexOf(item);
     const next = list[index + 1];
@@ -1028,17 +1510,35 @@ class SelectionBox {
   }
 
   /**
-   * Removes the given Item's chipView from the selection box.
-   * @param {Item} item
-   */
+    * The chip Views of the Items in the box, in box order, and nothing more.
+    *
+    * Derived from `items` rather than tracked alongside it: the list of what is
+    * in the box is the one thing that cannot disagree with itself, and a mirrored
+    * array only has to be updated in every path that adds, removes or re-renders.
+    * It used to be, and drifted — a chip added while the box was collapsed took
+    * the early return above without ever joining the array, and `render` never
+    * consulted it at all, so a collapse followed by an expansion left the array
+    * describing a box that no longer existed. A Group Item owns no chip and is
+    * left out here for the same reason it owns no Chip.
+    * @returns {HTMLElement[]}
+    */
+  get chips() {
+    return this.items.map((item) => item.chipView).filter(Boolean);
+  }
+
+  /**
+    * Removes the given Item's chipView from the selection box.
+    * @param {Item} item
+    */
   remove(item) {
-    const wasCollapsed = this.isCollapsed;
     const itemIndex = this.items.indexOf(item);
     if (itemIndex >= 0) this.items.splice(itemIndex, 1);
+    // While batching, the chip's place in the box and the collapsed state are the
+    // settling render's to redo from `items`; only the membership is kept here.
+    if (this.control.batching) return;
 
-    const chipIndex = this.chips.indexOf(item.chipView);
-    if (chipIndex >= 0) this.chips.splice(chipIndex, 1);
-
+    // Read before `#updateCollapsedState`, which may change what it says.
+    const wasCollapsed = this.isCollapsed;
     this.#updateCollapsedState();
 
     if (this.isCollapsed) {
@@ -1097,7 +1597,6 @@ class SelectionBox {
    */
   clear() {
     this.items = [];
-    this.chips = [];
     this.collapsedChip = null;
   }
 
@@ -1116,6 +1615,27 @@ class SelectionBox {
   selectLast() {
     const list = this.chipItems;
     if (list.length > 0) this.control.dropDown.setCurrent(list[list.length - 1]);
+  }
+
+  /**
+   * Moves the "Current" marker onto a Chip, for when it has been handed an Item
+   * that owns none - a toggled Group Item, say - while the mode it lands in
+   * navigates Chips and would have nothing to move between. No Chip was vacated
+   * in that case, so there is no slot to point at the way `#promoteSuccessor`
+   * does; the answer is the next Chip along the tree, and the last one when the
+   * marker stands past all of them.
+   * @param {Item} item the Item the marker currently stands on
+   * @returns {boolean} whether a Chip was there to move it to
+   */
+  electChipAfter(item) {
+    const list = this.chipItems;
+    if (list.length === 0) return false;
+    // `definitionIndex` is the place in the flat order, so it orders two Items
+    // the same way `indexOf` on that array does - without the repeated scan.
+    const from = item.definitionIndex;
+    const next = list.find((chip) => chip.definitionIndex > from);
+    this.control.dropDown.setCurrent(next ?? list[list.length - 1]);
+    return true;
   }
 
   /** Moves the "Current" marker to the next chip Item, wrapping at the end. */
@@ -1231,6 +1751,24 @@ class DropDown {
   }
 
   /**
+   * Re-homes the Current marker after a text query has re-filtered the list: an
+   * Item the query just hid cannot stay marked, so the marker moves to the first
+   * navigable Item, and a query that left nothing to mark drops it. A marker
+   * standing on an Item the query kept visible is left alone, so typing on after
+   * navigating does not drag the marker back to the top on every keystroke.
+   *
+   * This answers for the text query alone. The selected-Items restriction is a
+   * re-filter as well, but it has a rule of its own for the marker — the one
+   * REQ-3.11-27 gives — so Filter#refilter deliberately does not come through
+   * here, and a selection change cannot quietly move the marker this way.
+   */
+  rehomeCurrent() {
+    const current = this.#currentItem;
+    if (current && current.visible) return;
+    this.setCurrent(this.control.navigableTopLevel[0] || null);
+  }
+
+  /**
    * Whether the DropDown is currently visible. Reads return the open state;
    * assigning a boolean shows (open) or hides (close) it. Opening also brings
    * the Current Item into view, fires `cm-dropdown-open`/`cm-dropdown-close`
@@ -1267,26 +1805,32 @@ class DropDown {
     item.itemView.scrollIntoView({ block: 'nearest' });
   }
 
-  /**
+/**
    * Filters the Item tree by Item label. The default matching function keeps an
    * Item visible when its label contains `textValue` (case-insensitive). An
    * empty value shows every Item.
    *
-   * Visibility of a Group Item's children follows `groupItems.toggleScope`:
-   * - `'all'`: a matching Group Item shows all of its children.
+   * Visibility of a Group Item's children follows `groupItems.filterScope`:
+   * - `'all'` (default): a matching Group Item shows all of its children.
    * - `'matching'`: a matching Group Item keeps only the children that also match.
    * A non-matching Group Item stays visible when at least one of its children
    * is visible.
+   *
+   * This is its own option, separate from `groupItems.toggleScope`, because the
+   * two answer different questions at different moments: this one says what a
+   * match reveals, that one says what a toggle reaches. The vocabularies differ
+   * to match - a child can be visible because its Group matched without matching
+   * the query itself, so "visible" is not a filtering answer the way "matching"
+   * is not a toggling one.
    * @param {string} textValue
    * @param {(item: Item, textValue: string) => boolean} [matchFn]
    */
   filter(textValue, matchFn) {
     const query = String(textValue || '');
-    this.showSelectAllButton = query !== '';
     const q = query.toLowerCase();
     const customMatcher = typeof matchFn === 'function';
     const matcher = matchFn || ((item) => item.label.toLowerCase().includes(q));
-    const scope = this.control.options.groupItems?.toggleScope || 'all';
+    const scope = this.control.options.groupItems?.filterScope || 'all';
 
     const apply = (items) => {
       for (const item of items) {
@@ -1306,6 +1850,15 @@ class DropDown {
     };
 
     apply(this.control.items);
+
+    // Select All is a flat action over the visible selectable Leaves. With fewer
+    // than two of them there is nothing to bulk-select: it would repeat a single
+    // Item's toggle, or do nothing at all, so the button stays hidden.
+    const visibleLeaves = this.control.items.selectableItems.filter(
+      (item) => item.visible
+    ).length;
+    this.showSelectAllButton = query !== '' && visibleLeaves > 1;
+
     this.control.render();
   }
 
@@ -1343,8 +1896,9 @@ function closestByClass(el, className) {
  * transition hooks, then notifies the injected transition callback (from which
  * the component fires `cm-mode-change`); `changeToPrevious()` routes through
  * the same setter. `processKey()` routes an input event to the active mode's
- * `handlers` set. Not part of the public API — reachable only through the
- * `MSELECT_INTERNALS` symbol exported for tests.
+ * `handlers` set. `leaveDropDown()` asks the mode a DropDown was entered from
+ * for its own rule about being left. Not part of the public API — reachable
+ * only through the `MSELECT_INTERNALS` symbol exported for tests.
  */
 class Modes {
   /** @private name of the mode that was active before the current one, if any */
@@ -1399,7 +1953,8 @@ class Modes {
    * Registers a mode definition. Mode names are unique; re-registering a mode
    * replaces its definition.
    * @param {string} name one of MODES.*
-   * @param {{onEntry?: Function, onLeave?: Function, handlers?: Record<string, Function>}} cfg
+   * @param {{onEntry?: Function, onLeave?: Function, onDropDownLeave?: Function,
+   *          handlers?: Record<string, Function>}} cfg
    */
   define(name, cfg = {}) {
     this.#definitions.set(name, { name, ...cfg });
@@ -1438,13 +1993,41 @@ class Modes {
   }
 
   /**
+   * Hands the keyboard back from a DropDown the active mode opened, by asking
+   * the mode that DropDown was entered from how it wants to be left.
+   *
+   * The origin is the whole of what a DropDown carries over, and only some
+   * origins read the closing key differently, so that difference is registered
+   * as the origin's own rule and lives with the rest of its behaviour. An origin
+   * with no rule is left to the caller, which falls back to `changeToPrevious` —
+   * the answer for an origin that simply returns as it was.
+   *
+   * @param {'Escape'|'Enter'} key the key that closed the DropDown
+   * @returns {boolean} whether the origin had a rule of its own
+   */
+  leaveDropDown(key) {
+    const origin = this.#previous && this.#definitions.get(this.#previous);
+    if (!origin?.onDropDownLeave) return false;
+    origin.onDropDownLeave(key);
+    return true;
+  }
+
+  /**
    * Routes an input event to the active mode's handler for the event's key.
+   * A handler that switched the mode may return REDISPATCH to hand the same
+   * event to the new mode's handler; the lookup is then repeated once, so a key
+   * is owned by the mode it was handed over to rather than by two rules.
    * @param {Event} event
    * @returns {unknown} the handler's result, or false when unhandled
    */
   processKey(event) {
-    const fn = (this.#definitions.get(this.#current)?.handlers || {})[event?.key];
-    return fn ? fn(event) : false;
+    let result = false;
+    for (let pass = 0; pass < 2; pass += 1) {
+      const fn = (this.#definitions.get(this.#current)?.handlers || {})[event?.key];
+      result = fn ? fn(event) : false;
+      if (result !== REDISPATCH) break;
+    }
+    return result;
   }
 }
 
@@ -1477,10 +2060,20 @@ class Modes {
  *   (`MODES.FILTER`, `MODES.DROPDOWN`, `MODES.CHIP`, `MODES.COLLAPSED`). Fired
  *   only for real transitions; assigning the already active mode (e.g.
  *   re-entering Filter while Filter is active) is a no-op and stays silent.
+ *
+ * @typedef {CustomEvent<{values: unknown[], added: unknown[], removed: unknown[]}>} CmSelectionChangeEvent
+ *   Detail: `{ values, added, removed }` — the selection after the change in
+ *   Chip order, the values that entered it and the ones that left. Fired once
+ *   per settled selection change, after the Chips, the visible list and the form
+ *   mirror are up to date; a bulk change (`toggleAll()`, `clearAll()`, assigning
+ *   `selectedValues`, a Group toggle) fires it once, and a settle that moves
+ *   nothing fires nothing. A reorder alone fires with both lists empty.
  */
 
 /**
- * The component.
+ * The component. Application code should build a value-based `MSelectFacade`
+ * over it rather than reach into its internals; this class is exported for the
+ * facade, tests, and advanced composition.
  */
 export class MSelect {
   /**
@@ -1491,16 +2084,24 @@ export class MSelect {
     this.root = root;
     this.options = { maxVisibleChips: null, ...(config.options || {}) };
     this.logger = new Logger(this.options.logLevel || 'silent');
+    // Spec warnings are raised while Items are built below, before any of them
+    // has a control to report to. An explicit logLevel governs them too, so
+    // 'silent' means silent; left unset, they keep their visible default.
+    if (this.options.logLevel !== undefined) specLog.setLevel(this.options.logLevel);
 
-    this.#modes = new Modes(MODES.FILTER, (from, to) =>
-      this.emit('cm-mode-change', { from, to })
-    );
+    this.#modes = new Modes(MODES.FILTER, (from, to) => {
+      this.#markMode(to);
+      this.emit('cm-mode-change', { from, to });
+    });
 
     this.dropDown = new DropDown(this, [], this.options);
     this.selectionBox = new SelectionBox(this);
 
     this.el = document.createElement('div');
     this.el.className = 'cm-select';
+    // The machine starts in Filter mode without a transition, so the class that
+    // mirrors the active mode is set here rather than by the hook above.
+    this.#markMode(this.#modes.mode);
     this.el.append(this.selectionBox.el, this.dropDown.el);
     root.append(this.el);
 
@@ -1513,8 +2114,12 @@ export class MSelect {
 
     this.selectionBox.el.addEventListener('click', (e) => this.#onSelectionBoxClick(e));
     this.el.addEventListener('mousedown', (e) => this.#onControlMouseDown(e));
-    document.addEventListener('mousedown', (e) => this.#onDocumentMouseDown(e));
-    document.addEventListener('keydown', (e) => this.#onDocumentKeyDown(e));
+    // Stored rather than inlined so destroy() can detach them: these are the
+    // listeners that outlive the element and would keep the instance reachable.
+    this.#docMousedown = (e) => this.#onDocumentMouseDown(e);
+    this.#docKeydown = (e) => this.#onDocumentKeyDown(e);
+    document.addEventListener('mousedown', this.#docMousedown);
+    document.addEventListener('keydown', this.#docKeydown);
 
     if (!this.options.delayedLoad) this.setItems(config.items);
 
@@ -1524,6 +2129,13 @@ export class MSelect {
 
   /** @private internal input-mode state machine, wired in the constructor, exposed only via MSELECT_INTERNALS */
   #modes;
+
+  /** @private document-level handler references, so destroy() can detach them */
+  #docMousedown;
+  #docKeydown;
+
+  /** @private guard so destroy() runs its teardown once */
+  #destroyed = false;
 
   /** @private Whether the Item tree was already instantiated (setItems one-time). */
   #itemsLoaded = false;
@@ -1562,9 +2174,24 @@ export class MSelect {
       return;
     }
 
+    // Checked before the Chip body below, which the "x" is inside of: the two are one
+    // Chip as far as a click on the body is concerned, and two different acts as
+    // far as what was clicked. An individual Chip's "x" stops its own handler dead
+    // and this Chip has no Item of its own to do it for.
+    if (
+      closestByClass(target, 'cm-chip__x') &&
+      closestByClass(target, 'cm-chip--summary')
+    ) {
+      this.clearAll();
+      return;
+    }
+
     if (closestByClass(target, 'cm-chip--summary')) {
       this.#switchMode(MODES.COLLAPSED);
-      this.dropDown.open = true;
+      // A toggle, so the Chip that stands for the selection is also how the
+      // selection is closed again - the mouse's answer to Escape, which is what
+      // the keyboard uses while the DropDown it opened is up.
+      this.dropDown.open = !this.dropDown.open;
       return;
     }
 
@@ -1659,6 +2286,27 @@ export class MSelect {
   }
 
   /**
+   * Mirrors the active mode onto the root element as `cm-select--mode-<mode>`,
+   * one class at a time, so the stylesheet can tell one mode from another
+   * without the stylesheet having to infer it. It is set here rather than in
+   * #switchMode because the machine is the only thing that knows the mode a
+   * request actually landed on: #switchMode turns an unreachable Chip/Collapsed
+   * into Filter mode, and the class has to follow the outcome.
+   *
+   * `cm-dropdown--open` cannot stand in for this. The DropDown is open in Chip
+   * and Collapsed mode too, between the press that opens it and the one that
+   * hands over to DropDown mode, so the open state alone does not say that
+   * DropDown mode is the active one.
+   * @private
+   * @param {string} mode
+   */
+  #markMode(mode) {
+    for (const known of Object.values(MODES)) {
+      this.el.classList.toggle(`cm-select--mode-${known}`, known === mode);
+    }
+  }
+
+  /**
    * The Chip and Collapsed modes navigate the selection's Chips; with no Chips
    * left they have nothing to operate on and fall back to the default Filter
    * mode. An emptied selection also empties a DropDown that was restricted to
@@ -1728,6 +2376,24 @@ export class MSelect {
   }
 
   /**
+   * Closes the DropDown and hands the keyboard back to the mode it was entered
+   * from. The mode the DropDown was entered from is the whole of what it carries
+   * over, and only Collapsed mode reads the closing key differently, so that
+   * difference is registered as that mode's own rule and asked for here; every
+   * other origin returns as it was, marker and all.
+   *
+   * With no previously active mode recorded (not reachable through normal flows
+   * — every transition records one) there is no origin to ask, and it falls back
+   * to the default Filter mode with a logged warning, through `changeToPrevious`.
+   *
+   * @param {'Escape'|'Enter'} key the key that closed the DropDown
+   */
+  leaveDropDown(key) {
+    this.dropDown.open = false;
+    if (!this.#modes.leaveDropDown(key)) this.changeToPrevious();
+  }
+
+  /**
    * Dispatches a bubbled CustomEvent of the given type on the component's root
    * element, carrying the provided detail. This is the single dispatcher behind
    * the whole public event surface (prefix `cm-`).
@@ -1756,6 +2422,9 @@ export class MSelect {
    * });
    * control.el.addEventListener('cm-mode-change', ({ detail }) => {
    *   console.log(`mode ${detail.from} -> ${detail.to}`);
+   * });
+   * control.el.addEventListener('cm-selection-change', ({ detail }) => {
+   *   console.log(detail.values, `+${detail.added}`, `-${detail.removed}`);
    * });
    * control.el.addEventListener('cm-dropdown-open', () => console.log('open'));
    * ```
@@ -1792,13 +2461,26 @@ export class MSelect {
    *
    * The new tree fully replaces the old one: the DropDown is rebuilt, the
    * Current marker and the stored selection are reset, and the selection is
-   * re-seeded from the new specs' `selected: true` flags. Preset selections
-   * beyond PRESET_SELECTION_LIMIT enforce maxVisibleChips.
+   * re-seeded. Preset selections beyond PRESET_SELECTION_LIMIT enforce
+   * maxVisibleChips.
+   *
+   * `selectedValues` is the selection stated as an array of *Item* values, and it
+   * is authoritative where a spec's own `selected: true` flag is not: given, it
+   * alone says which *Items* are selected and in which order, so a flag outside it
+   * selects nothing. The order it gives is the order the *Chips* arrive in the
+   * box, which is what `chipPlaceOrder: 'unsorted'` shows; the other placement
+   * orders re-sort them as usual.
+   *
+   * Each value must resolve to an *Item* that owns a *Chip*, must not be repeated,
+   * and anything else throws with the tree still unpopulated rather than leaving a
+   * selection half-stated. Omitting the argument falls back to the `selected: true`
+   * flags, which arrive in definition order.
    * @param {object[]} [specs]
+   * @param {unknown[]} [selectedValues] the selection, as *Item* values in Chip order
    * @returns {MSelect}
    * @fires CmItemsSetEvent when `delayedLoad` is enabled
    */
-  setItems(specs) {
+  setItems(specs, selectedValues) {
     if (this.#itemsLoaded) {
       throw new Error('setItems() can only be populated once per component instance');
     }
@@ -1810,6 +2492,16 @@ export class MSelect {
     this.allItems.forEach((item) => {
       item.owner = this;
     });
+
+    // Resolved before anything is rendered. Unknown, Group and repeated values
+    // are warned about and skipped, so the tree is populated with whatever the
+    // seed still resolves to (REQ-7-20).
+    const seeded =
+      selectedValues === undefined ? null : this.#resolveSelectedValues(selectedValues);
+
+    // Batched with the Chip seeding below: setting the flags one by one would
+    // settle - and re-render the whole tree - once per Item (REQ-9-05).
+    if (seeded) this.#inBatch(() => this.#applySeed(seeded));
 
     this.dropDown.clearCurrent();
     this.selectionBox.clear();
@@ -1827,14 +2519,24 @@ export class MSelect {
       );
     }
 
-    for (const item of selected) {
-      this.selectionBox.add(item);
-    }
+    // `selected` is the selection in document order, which is what the count and
+    // the safeguard above are about; the box itself is filled in the seed's own
+    // order where there is one, and in document order otherwise. Batched, so the
+    // chips are placed once by the render below rather than once per Item - the
+    // per-Item path re-reads `selectedItems` and re-sorts the box every time.
+    this.#inBatch(() => {
+      for (const item of seeded || this.selectedItems) {
+        this.selectionBox.add(item);
+      }
+    });
+    this.selectionBox.render();
+    this.#syncFormValues();
     this.#normalizeMode();
 
     if (this.options.delayedLoad) {
       this.emit('cm-items-set', { count: this.allItems.length });
     }
+    this.#emitSelectionChange();
     return this;
   }
 
@@ -1852,12 +2554,84 @@ export class MSelect {
     this.selectionBox.filter.displaySelected = false;
   }
 
-  /** @private Throws when more than one Item declares the same non-empty value. */
+  /**
+   * @private Resolves the `selectedValues` seed to the Items it names, in the order
+   * given. Only selectable leaves own a Chip, so only they can be named. The
+   * resolution is lenient, because the seed is a selection remembered from a
+   * previous session and a list that no longer matches the tree exactly should
+   * restore what still resolves rather than fail the whole control: a value naming
+   * no Item, a Group (selected through its children, REQ-3.3-04) or a repeat of an
+   * earlier value is warned about and skipped, while the first occurrence of each
+   * value fixes the Chip order. A non-array argument is still a type error.
+   * @param {unknown[]} values
+   * @returns {Item[]}
+   */
+  #resolveSelectedValues(values) {
+    if (!Array.isArray(values)) {
+      throw new Error('selectedValues must be an array of Item values');
+    }
+    const byValue = new Map();
+    for (const item of this.allItems) {
+      const { value } = item;
+      if (value === undefined) continue;
+      byValue.set(value, item);
+    }
+    const seen = new Set();
+    const resolved = [];
+    for (const value of values) {
+      const item = byValue.get(value);
+      if (item === undefined) {
+        specLog.warn(
+          `selectedValues names "${value}", which is no Item's value; ignoring it`
+        );
+        continue;
+      }
+      if (item.isGroup) {
+        specLog.warn(
+          `selectedValues names "${value}", a Group; a Group owns no Chip and is ` +
+            'selected through its children, so it is ignored'
+        );
+        continue;
+      }
+      if (seen.has(value)) {
+        specLog.warn(
+          `selectedValues names "${value}" more than once; ignoring the repeat`
+        );
+        continue;
+      }
+      seen.add(value);
+      resolved.push(item);
+    }
+    return resolved;
+  }
+
+  /**
+   * @private States the selection the seed resolves to. The array is the whole
+   * selection, so a `selected: true` flag on a spec is a second claim on the same
+   * state rather than a fallback: only the named Items end up selected. The flags
+   * are written directly rather than through `Item#toggle`, because this is a
+   * claim about which Items are selected, not a request to interactively walk the
+   * tree and emit toggles - a Group settles from its children's counters, not from
+   * a flag of its own (REQ-3.3-04).
+   * @param {Item[]} seeded
+   */
+  #applySeed(seeded) {
+    const named = new Set(seeded);
+    for (const item of this.allItems) {
+      if (item.selected && !named.has(item)) item.selected = false;
+    }
+    for (const item of seeded) {
+      item.selected = true;
+    }
+  }
+
+  /** @private Throws when more than one Item declares the same value. An Item
+   * with no value is skipped: there is nothing to collide on. */
   #assertUniqueValues() {
     const seen = new Set();
     for (const item of this.allItems) {
       const value = item.value;
-      if (value === undefined || value === null || value === '') continue;
+      if (value === undefined) continue;
       if (seen.has(value)) {
         throw new Error(`Duplicate item value: "${value}"`);
       }
@@ -1889,11 +2663,107 @@ export class MSelect {
     return this.items.selectableItems.filter((i) => i.selected);
   }
 
-  /** Chips ordered per `chipPlaceOrder`. */
+  /**
+   * The selection stated as an array of Item values. It is the symmetric read of
+   * the `selectedValues` seed accepted by `setItems`: the values are in arrival
+   * order, the order the seed fixes and the one order that cannot be derived from
+   * the selected state (REQ-5-02), so feeding it back reproduces the same Chips.
+   * It contains selectable leaves only: a Group owns no Chip and is selected
+   * through its children, so it never appears (REQ-3.2-04).
+   * @returns {unknown[]}
+   */
+  get selectedValues() {
+    return this.selectionBox.items.map((item) => item.value);
+  }
+
+  /**
+   * States the whole selection at runtime from an array of Item values. The
+   * runtime counterpart of the `selectedValues` seed accepted by `setItems`, and
+   * its symmetric write: same lenient resolution (a value naming no Item, a
+   * Group or a repeat is warned about and skipped, REQ-7-20) and the same order,
+   * so the Chips arrive in the array's order. A non-array argument throws before
+   * anything is changed, leaving the selection untouched. Unlike `setItems` it
+   * may be called any number of times and never rebuilds the Item tree
+   * (REQ-6-04). The change is settled once, so a large selection costs one
+   * render rather than one per Item (REQ-9-05).
+   * @param {unknown[]} values the selection, as Item values in Chip order
+   */
+  set selectedValues(values) {
+    // Resolved first: a bad argument must not leave a half-stated selection.
+    const seeded = this.#resolveSelectedValues(values);
+    this.#inBatch(() => {
+      this.#applySeed(seeded);
+      this.selectionBox.clear();
+      for (const item of seeded) this.selectionBox.add(item);
+    });
+    this.dropDown.clearCurrent();
+    this.render();
+    this.#normalizeMode();
+    this.#emitSelectionChange();
+  }
+
+  /** @private Hidden-input container for form submission; created on first need. */
+  #formEl = null;
+
+  /** @private Values already warned about the comma delimiter; warn once each. */
+  #commaWarned = new Set();
+
+  /**
+   * @private Mirrors the selection into hidden inputs on `MSelect#el`, so the
+   * selected values submit with the enclosing `<form>` (REQ-6-03, REQ-7-08). One
+   * input per selected Item, named verbatim by `options.name` and emitted in
+   * `selectedValues` order, so `FormData`/`URLSearchParams` carry repeated
+   * entries (`name=v&name=w`) for the server to join. Without a name the control
+   * takes no part in submission.
+   *
+   * The order matches the Chips, not the document: a seed order survives, so
+   * what submits is what `selectedValues` reports. A value containing the comma
+   * the server joins on is submitted as-is but warned about once, because it
+   * cannot be told apart from a separator once joined.
+   */
+  #syncFormValues() {
+    const name = this.options.name;
+    if (!name) return;
+    if (!this.#formEl) {
+      this.#formEl = document.createElement('div');
+      this.#formEl.className = 'cm-form';
+      this.el.append(this.#formEl);
+    }
+    this.#formEl.innerHTML = '';
+    for (const item of this.selectionBox.items) {
+      const value = String(item.value);
+      if (value.includes(',') && !this.#commaWarned.has(value)) {
+        this.#commaWarned.add(value);
+        specLog.warn(
+          `Item "${item.label}": value ${JSON.stringify(value)} contains a comma, ` +
+            `but "${name}" submits as repeated entries the server joins with commas, ` +
+            'so the value cannot be told apart after the join.'
+        );
+      }
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = value;
+      this.#formEl.append(input);
+    }
+  }
+
+  /**
+   * Chips ordered per `chipPlaceOrder`.
+   *
+   * `unsorted` is the order the Chips arrived in the box, the most recently
+   * selected Item at the tail - so an Item unselected and selected again moves
+   * to the tail. It is the one order that cannot be derived from the current
+   * selected state, which is why it reads the box's own membership rather than
+   * `selectedItems`. A selection preset at instantiation arrives in definition
+   * order, so it yields the same order as `asDefined`.
+   *
+   * @returns {Item[]}
+   */
   orderedChips() {
-    const order = this.options.chipPlaceOrder || 'asPicked';
+    const order = this.options.chipPlaceOrder || 'unsorted';
     let list;
-    if (order === 'asPicked') {
+    if (order === 'unsorted') {
       list = this.selectionBox.items.slice();
     } else {
       list = this.selectedItems.slice();
@@ -1908,7 +2778,7 @@ export class MSelect {
 
   /**
    * Changes the chip placement order at runtime and re-renders the chips.
-   * @param {'asPicked'|'asDefined'|'alphabetical'} order
+   * @param {'unsorted'|'asDefined'|'alphabetical'} order
    */
   setChipPlaceOrder(order) {
     this.options.chipPlaceOrder = order;
@@ -1958,39 +2828,80 @@ export class MSelect {
    * visible again, and keeping the marker on it is the documented behaviour.
    */
   #settleAfterSelectionChange() {
+    this.#syncFormValues();
     this.#syncVisibleList();
     this.#normalizeMode();
 
     if (
-      this.#modes.mode !== MODES.DROPDOWN ||
-      !this.selectionBox.filter.displaySelected
+      this.#modes.mode === MODES.DROPDOWN &&
+      this.selectionBox.filter.displaySelected
     ) {
-      return;
+      const stranded = this.dropDown.currentItem;
+      if (stranded && !stranded.navigable) {
+        // The Item just left the list, so the walk is asked for its successor in
+        // the list that is left, and it is asked the way a toggled Item is
+        // answered: by its next sibling. Toggling a Group is an act on the Group
+        // itself, so its subtree is already accounted for and is stepped over
+        // rather than walked into. With no next sibling the answer is the Item
+        // that is then the last, which is the question the axis is asked - and
+        // on a column the children of a Group share its line, so the last one of
+        // them is that answer while on a row they stand off the line and the
+        // Group itself is. Every hop filters on `navigable`, which is what makes
+        // "next visible" the walk's own answer rather than a separate lookup.
+        this.dropDown.setCurrent(
+          stranded.nextInLevel() ?? stranded.previousInAxis()
+        );
+      }
     }
-    const stranded = this.dropDown.currentItem;
-    if (!stranded || stranded.navigable) return;
 
-    // The Item just left the list, so the walk is asked for its successor in the
-    // list that is left, and it is asked the way a toggled Item is answered: by
-    // its next sibling. Toggling a Group is an act on the Group itself, so its
-    // subtree is already accounted for and is stepped over rather than walked
-    // into. With no next sibling the answer is the Item that is then the last,
-    // which is the question the axis is asked - and on a column the children of
-    // a Group share its line, so the last one of them is that answer while on a
-    // row they stand off the line and the Group itself is. Every hop filters on
-    // `navigable`, which is what makes "next visible" the walk's own answer
-    // rather than a separate lookup.
-    this.dropDown.setCurrent(stranded.nextInLevel() ?? stranded.previousInAxis());
+    this.#emitSelectionChange();
+  }
+
+  /**
+   * @private The selection as reported by the last `cm-selection-change`.
+   */
+  #selectionSnapshot = [];
+
+  /**
+   * @private Emits `cm-selection-change` when the selection has moved since the
+   * last report. `values` is the whole selection in Chip order; `added` holds
+   * the values that entered it and `removed` the ones that left, each in the
+   * order of the array it comes from. A change that only reorders the selection
+   * is reported too, with both lists empty, because the order is part of what
+   * the Chips show. A settle that moves nothing emits nothing, so the event
+   * marks changes a reader would notice rather than internal re-renders.
+   * @fires CmSelectionChangeEvent
+   */
+  #emitSelectionChange() {
+    const values = this.selectedValues;
+    const previous = this.#selectionSnapshot;
+    const unchanged =
+      values.length === previous.length &&
+      values.every((value, index) => value === previous[index]);
+    if (unchanged) return;
+
+    const before = new Set(previous);
+    const after = new Set(values);
+    this.#selectionSnapshot = values;
+    this.emit('cm-selection-change', {
+      values: [...values],
+      added: values.filter((value) => !before.has(value)),
+      removed: previous.filter((value) => !after.has(value)),
+    });
   }
 
   /**
    * @private Clears the selection of `item` and of everything below it. The
    * list is re-rendered by `unselectItem` once, after the whole subtree is done.
+   * A *Group* has no flag to clear and no Chip to drop, so the walk starts at its
+   * children and the subtree answers for itself.
    * @param {Item} item
    */
   #unselect(item) {
-    item.selected = false;
-    this.selectionBox.remove(item);
+    if (!item.isGroup) {
+      item.selected = false;
+      this.selectionBox.remove(item);
+    }
     for (const child of item) {
       this.#unselect(child);
     }
@@ -1999,9 +2910,12 @@ export class MSelect {
   /**
    * Handles an Item's selection state change: adds the Chip for passed/selected
    * Items carrying a value, removes it for unselected ones. Called by Item#toggle.
+   * A Group never arrives here - it has no selection of its own, so it owns no
+   * Chip, and its children report themselves.
    * @param {Item} item
    */
   onItemToggled(item) {
+    if (item.isGroup) return;
     if (item.selected) {
       if (item.value !== undefined) {
         this.selectionBox.add(item);
@@ -2009,28 +2923,82 @@ export class MSelect {
     } else {
       this.selectionBox.remove(item);
     }
+    if (!this.batching) this.#settleAfterSelectionChange();
+  }
+
+  /** @private nesting depth of bulk selection changes; see `#inBatch`. */
+  #batchDepth = 0;
+
+  /**
+   * Whether a bulk selection change is in progress, so the per-Item work that the
+   * settling render redoes anyway is left out.
+   * @returns {boolean}
+   */
+  get batching() {
+    return this.#batchDepth > 0;
+  }
+
+  /**
+   * Runs a change over a subtree as one settle: the leaves report themselves
+   * while the per-Item settling is suspended, then the Chips, the list and the
+   * form are brought up to date once and one `cm-selection-change` is emitted.
+   * A Group Item's own toggle cascade uses this, so a click on a Group costs one
+   * settle rather than one per descendant (REQ-9-05). Called inside a change
+   * that is already bulk, it joins that change instead of settling early.
+   * @param {() => void} fn
+   */
+  withSelectionBatch(fn) {
+    if (this.batching) {
+      fn();
+      return;
+    }
+    this.#inBatch(fn);
     this.#settleAfterSelectionChange();
+  }
+
+  /**
+   * Runs a bulk selection change with the per-Item settling and the SelectionBox's
+   * per-Item collapse bookkeeping suspended, leaving one render and settle for the
+   * caller to do at the end. Without it a change touching N Items settles N times
+   * over, re-rendering the whole tree each time.
+   * @template T
+   * @param {() => T} fn
+   * @returns {T}
+   */
+  #inBatch(fn) {
+    this.#batchDepth++;
+    try {
+      return fn();
+    } finally {
+      this.#batchDepth--;
+    }
   }
 
   clearAll() {
     this.logger.info('clear all');
     this.requestItems();
-    this.items.selectableItems.forEach((i) => {
-      if (!i.selected) return;
-      i.selected = false;
-      this.onItemToggled(i);
-    });
+    this.#inBatch(() =>
+      this.items.selectableItems.forEach((i) => {
+        if (!i.selected) return;
+        i.selected = false;
+        this.onItemToggled(i);
+      })
+    );
     this.dropDown.clearCurrent();
     this.render();
     this.#normalizeMode();
+    this.#emitSelectionChange();
   }
 
   toggleAll() {
     this.logger.info('toggle all');
     this.requestItems();
-    this.dropDown.items.toggle();
-    this.selectionBox.filter.query = '';
+    this.#inBatch(() => this.dropDown.items.toggle());
+    if (this.selectionBox?.filter) {
+      this.selectionBox.filter.query = '';
+    }
     this.render();
+    this.#emitSelectionChange();
   }
 
   /* ---- selection interaction ---- */
@@ -2077,6 +3045,30 @@ export class MSelect {
   render() {
     this.dropDown.render();
     this.selectionBox.render();
+    this.#syncFormValues();
+  }
+
+  /**
+   * The active input mode name: `filter`, `dropdown`, `chip` or `collapsed`.
+   * @returns {string}
+   */
+  get mode() {
+    return this.#modes.mode;
+  }
+
+  /**
+   * Tears the control down: detaches the document-level listeners registered in
+   * the constructor — the only ones that outlive the element and would otherwise
+   * keep the instance reachable — and removes the control's element from the
+   * page. Idempotent. Prefer it over dropping the reference; use
+   * `MSelectFacade#destroy()` from application code.
+   */
+  destroy() {
+    if (this.#destroyed) return;
+    this.#destroyed = true;
+    document.removeEventListener('mousedown', this.#docMousedown);
+    document.removeEventListener('keydown', this.#docKeydown);
+    this.el.remove();
   }
 }
 

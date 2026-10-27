@@ -10,7 +10,7 @@
 - The component must ship with a simple built-in logger that supports configurable log levels for debugging purposes.
 
 ## Demo
-- Maintain a live demo of the component in index.html.
+- Maintain a live demo of the component in demo/index.html.
 - Vite is used ONLY as a dev server for the live demo (reflecting updates) and as the test runner. It must NOT modify the code or CSS that runs on the demo. Styles are served "as is", with no transformation.
 - During intermediate stages, provide temporary UI elements for functionality not yet wired to the component's mouse and keyboard handling.
 
@@ -43,15 +43,16 @@
 - Keep code as structured as possible.
 
 ## Documentation
-- README.md
-- AGENTS.md
-- requirements.md
-- use-cases.md
+- project/AGENTS.md — this file
+- project/requirements.md — earlier requirements, partly superseded; kept for history
+- project/requirements2.md — the current requirements
+- project/use-cases.md — real-world scenarios; the normative source of the mouse and keyboard interaction (REQ-7-09)
+- README.md — to be written (not present yet)
 
 ## Development workflow
 Before creating code:
-1. Read requirements.md
-2. Read use-cases.md
+1. Read project/requirements2.md
+2. Read project/use-cases.md
 3. Propose a staged implementation plan.
 4. Implement the feature.
 5. Add tests.
@@ -61,19 +62,28 @@ Before creating code:
 ## Structure
 m-select/
 ├── src/
-│   ├── m-select.js
-│   ├── modes.js        (per-input-mode definitions: onEntry/onLeave/handlers)
-│   ├── m-select.css
+│   ├── main.js               (demo entry: imports the CSS, instantiates the demo facade)
+│   ├── m-select.js           (the component)
+│   ├── m-select-facade.js    (value-based public facade the demo and apps use)
+│   ├── modes.js              (per-input-mode definitions: onEntry/onLeave/handlers)
+│   └── m-select.css
 ├── test/
-├── demo/
+│   ├── 01_m-select.test.js   (hierarchically numbered: `describe` 1. N, `it` 1.N.M)
+│   ├── 02_m-select-facade.test.js (hierarchically numbered: `describe` 2. N, `it` 2.N.M)
+│   └── dom-stub.js           (minimal DOM stub, for environment: 'node')
 ├── project/
-├── dist/
-├── index.html
-├── requirements.md
-├── use-cases.md
-├── AGENTS.md
+│   ├── AGENTS.md
+│   ├── requirements.md
+│   ├── requirements2.md
+│   ├── use-cases.md
+│   ├── example.js
+│   └── input.example.js      (the config the demo runs on)
+├── demo/
+│   ├── index.html            (the live demo page; the Vite build entry)
+│   └── favicon.svg
+├── dist/                     (build output; ignored)
 ├── package.json
 └── vite.config.js
 
 ## Open items to be clarified
-- Detailed component requirements (to be added to requirements.md).
+- Whatever is still open lives in requirements2.md §11, not here; the requirements themselves are written (165 of them).
