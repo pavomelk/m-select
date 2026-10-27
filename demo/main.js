@@ -1,5 +1,5 @@
-import './m-select.css';
-import MSelectFacade from './m-select-facade.js';
+import '../src/m-select.css';
+import MSelectFacade from '../src/m-select-facade.js';
 import { inputExample } from '../project/input.example.js';
 
 const app = document.getElementById('app');
