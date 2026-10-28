@@ -3240,6 +3240,24 @@ expect(walks).toBe(0);
       expect(control.selectionBox.chips).toHaveLength(0);
     });
 
+    it('1.15.11 a mousedown inside the control leaves the DropDown and the mode alone', () => {
+      const control = setup();
+      control.items[0].toggle(true);
+      control.items[0].chipView.click();
+      expect(isOpen(control)).toBe(true);
+      expect(modes(control).mode).toBe('chip');
+
+      // Dispatched at the document, which is where the listener sits, but aimed
+      // at a node the control holds: the outside-click handler has to tell a
+      // pointer inside the control from one outside it, and that is the one
+      // thing this test pins - the source of the event, not its effects.
+      document.dispatchEvent({ type: 'mousedown', target: control.items[1].itemView });
+
+      expect(isOpen(control)).toBe(true);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
     it('1.15.6 clicking outside the control closes the DropDown and returns to the default filter mode', () => {
       const control = setup();
       control.items[0].toggle(true);
@@ -6084,6 +6102,37 @@ expect(walks).toBe(0);
       expect(control.dropDown.currentItem).toBe(control.items[1]);
       expect(control.selectionBox.filter.control).toBe(control);
     });
+
+    it('1.31.4 a key from inside the control is handled even with the DropDown closed', () => {
+      const control = setup();
+      const handled = { value: false };
+
+      // Dispatched at the document, where the listener sits, but aimed at a node
+      // inside the control. While the DropDown is closed the document listener
+      // considers only keys that came from inside the control, so this is the
+      // half of that guard the document path is responsible for - the other half
+      // being the Filter's own listener, which this dispatch deliberately skips.
+      document.dispatchEvent({
+        type: 'keydown',
+        key: 'ArrowDown',
+        target: control.selectionBox.filter.el,
+        preventDefault() {
+          handled.value = true;
+        },
+      });
+
+      expect(handled.value).toBe(true);
+      expect(control.dropDown.open).toBe(true);
+      expect(modes(control).mode).toBe('dropdown');
+
+      // Closed again before the test ends, and not because this test cares: no
+      // test destroys its control, so every control any earlier test built still
+      // has its document listener attached. An open DropDown answers document
+      // keydowns aimed anywhere, which is what lets a left-over one swallow the
+      // next test's keys and move its marker instead. This test is the one that
+      // ends with a list open, so it is the one that has to put it back down.
+      control.dropDown.open = false;
+    });
   });
 
   // requires: the in-control mousedown listener (#onControlMouseDown) keeping
@@ -7930,7 +7979,7 @@ expect(walks).toBe(0);
       expect(prevented.value).toBe(true);
     });
 
-    it('1.45.2 Enter after typing toggles the first match the query left Current and keeps the query', () => {
+    it('1.45.2 Enter after typing toggles the first match the query left Current and clears the query', () => {
       const control = setup();
       vi.useFakeTimers();
       try {
@@ -8176,6 +8225,175 @@ expect(walks).toBe(0);
           detail: { values: ['b', 'a'], added: [], removed: [] },
         },
       ]);
+    });
+  });
+
+  // requires: REQ-3.11-01, REQ-3.11-03, REQ-3.11-13 — the Filter holds the focus
+  // for the whole session, and in DropDown mode the keyboard has gone into the
+  // list. Tab is the browser's own focus walk, so leaving it to the browser there
+  // walks the page out from under the navigation; it is consumed instead and the
+  // focus stays on the Filter. Leaving the list is Escape's and Enter's job, and
+  // away from DropDown mode Tab still does what a single Tab stop promises.
+  describe('47. Keyboard - Tab does not walk the page while DropDown mode is active', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const mode = (control) => control[MSELECT_INTERNALS].modes.mode;
+    const keydown = (element, key, extra = {}) => {
+      const prevented = { value: false };
+      element.dispatchEvent({
+        type: 'keydown',
+        key,
+        target: element,
+        ...extra,
+        preventDefault() {
+          prevented.value = true;
+        },
+      });
+      return prevented;
+    };
+    // Focus the Filter the way the browser would, so "the focus did not move" is
+    // an assertion about this control's own element.
+    const focusFilter = (control) => {
+      control.selectionBox.filter.el.focus();
+      control.selectionBox.filter.el.dispatchEvent({ type: 'focus' });
+      return control.selectionBox.filter.el;
+    };
+
+    it('1.47.1 Tab in DropDown mode is consumed, leaving the focus on the Filter', () => {
+      const control = setup();
+      const el = focusFilter(control);
+      keydown(el, 'ArrowDown');
+      expect(mode(control)).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      const prevented = keydown(el, 'Tab');
+
+      expect(prevented.value).toBe(true);
+      expect(document.activeElement).toBe(el);
+      expect(mode(control)).toBe('dropdown');
+      expect(control.dropDown.open).toBe(true);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+    });
+
+    it('1.47.2 Shift+Tab is consumed the same way, so neither direction walks the page', () => {
+      const control = setup();
+      const el = focusFilter(control);
+      keydown(el, 'ArrowDown');
+
+      const prevented = keydown(el, 'Tab', { shiftKey: true });
+
+      expect(prevented.value).toBe(true);
+      expect(document.activeElement).toBe(el);
+      expect(mode(control)).toBe('dropdown');
+    });
+
+    it('1.47.3 Tab in Filter mode is left to the browser, so the component can still be left by Tab', () => {
+      const control = setup();
+      const el = focusFilter(control);
+      expect(mode(control)).toBe('filter');
+
+      const prevented = keydown(el, 'Tab');
+
+      expect(prevented.value).toBe(false);
+    });
+
+    it('1.47.4 Escape out of a DropDown entered from Chip mode keeps the Filter read-only and focused', () => {
+      const control = setup();
+      const el = focusFilter(control);
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      keydown(el, 'ArrowLeft');
+      expect(mode(control)).toBe('chip');
+      expect(el.readOnly).toBe(true);
+      keydown(el, 'ArrowDown');
+      keydown(el, 'ArrowDown');
+      expect(mode(control)).toBe('dropdown');
+
+      keydown(el, 'Escape');
+
+      expect(mode(control)).toBe('chip');
+      expect(el.readOnly).toBe(true);
+      expect(document.activeElement).toBe(el);
+    });
+
+    it('1.47.5 Escape out of a DropDown entered from Filter mode leaves an editable, focused Filter', () => {
+      const control = setup();
+      const el = focusFilter(control);
+      keydown(el, 'ArrowDown');
+      expect(mode(control)).toBe('dropdown');
+
+      keydown(el, 'Escape');
+
+      expect(mode(control)).toBe('filter');
+      expect(el.readOnly).toBe(false);
+      expect(document.activeElement).toBe(el);
+    });
+  });
+
+  // requires: a control mounted in the page, so an event dispatched on one of its
+  // nodes bubbles to the document listeners the way the browser runs it - the
+  // outside-click rule (REQ-3.10-10) decided by where the pointer landed, with no
+  // document event dispatched by hand. Every other area builds a detached host,
+  // where the stub correctly delivers to nothing above the control itself.
+  describe('48. Mounted - mouse events reach the document listeners by bubbling', () => {
+    const build = () => {
+      const host = document.createElement('div');
+      document.body.append(host);
+      const control = new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+        ],
+      });
+      return { host, control };
+    };
+
+    const mousedown = (element) =>
+      element.dispatchEvent({ type: 'mousedown', preventDefault() {} });
+
+    it('1.48.1 a mousedown on an Item bubbles to the document listener and is not an outside click', () => {
+      const { host, control } = build();
+      try {
+        control.items[0].toggle(true);
+        control.items[0].chipView.click();
+        expect(control.dropDown.open).toBe(true);
+        expect(control.mode).toBe('chip');
+
+        mousedown(control.items[1].itemView);
+
+        expect(control.dropDown.open).toBe(true);
+        expect(control.mode).toBe('chip');
+        expect(control.dropDown.currentItem).toBe(control.items[0]);
+      } finally {
+        control.destroy();
+        host.remove();
+      }
+    });
+
+    it('1.48.2 a mousedown outside the control bubbles to the document listener and closes the list', () => {
+      const { host, control } = build();
+      try {
+        control.items[0].toggle(true);
+        control.items[0].chipView.click();
+        expect(control.dropDown.open).toBe(true);
+
+        mousedown(document.body);
+
+        expect(control.dropDown.open).toBe(false);
+        expect(control.mode).toBe('filter');
+        expect(control.selectionBox.filter.el.readOnly).toBe(true);
+      } finally {
+        control.destroy();
+        host.remove();
+      }
     });
   });
 });

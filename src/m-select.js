@@ -2410,14 +2410,11 @@ export class MSelect {
    */
   leaveDropDown(key) {
     this.dropDown.open = false;
-    try {
-      if (key === 'Escape') {
-        if (this.selectionBox?.filter?.el) {
-          this.selectionBox.filter.el.readOnly = false;
-          this.selectionBox.filter.el.focus();
-        }
-      }
-    } catch (e) {}
+    // Only the focus is put back here, and only on the key that cancels. Whether
+    // the caret is editable belongs to the mode the key lands in, whose entry
+    // hook owns it: returning to Filter mode re-enables it, returning to Chip
+    // mode leaves the input read-only, which is what that mode navigates by.
+    if (key === 'Escape') this.selectionBox.filter.setCaretState({ focused: true });
     if (!this.#modes.leaveDropDown(key)) this.changeToPrevious();
   }
 
