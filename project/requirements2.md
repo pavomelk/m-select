@@ -41,12 +41,12 @@
 
 ### 3.1 Architecture / lower-level parts
 - [ ] `REQ-3.1-01` The component consists of an always-visible *Selection Box* and a collapsible *Drop Down*. *(P0)*
-- [ ] `REQ-3.1-02` It has *Item* objects organized in tree-like structure *(P0)*
+- [ ] `REQ-3.1-02` It has number of *Item* objects organized in tree-like structure *(P0)*
 - [ ] `REQ-3.1-03` Each *Item* object maintains its representation in the document as both "Item" and "Chip". *(P0)*
-- [ ] `REQ-3.1-04` It has a *Selection Box* object and a *Text* input object. *(P0)*
-- [ ] `REQ-3.1-05` Lower-level parts provide clear separation of concerns yet interact with each other. *(P1)*
-- [ ] `REQ-3.1-06` *Item* objects share concern in process of navigation and selection by delegating parts of it down the tree. *(P1)*
-- [ ] `REQ-3.1-07` The *Items* hierarchy is rooted in a *Root Container* — a separate Array-like object (not an *Item*) that serves as the parent of all top-level *Items*. *(P0)*
+- [ ] `REQ-3.1-04` *Selection Box* object has *Text* input object - see '3.9 Filter'. It also can accommodate "Chip" parts of *Item* objects. *(P0)*
+- [ ] `REQ-3.1-05` Lower-level parts provide clear separation of concerns yet interact with each other. *(P0)*
+- [ ] `REQ-3.1-06` *Item* objects share concern among themselves in process of navigation and selection by delegating parts of it down the tree to its children. *(P0)*
+- [ ] `REQ-3.1-07` The *Item* objects hierarchy is rooted in a *Root Container* — a separate Array-like object (not an *Item*) that serves as the parent of all top-level *Item* objects. *(P0)*
 - [ ] `REQ-3.1-08` The *Root Container* is the only node without a parent; every *Item*'s parent is either the *Root Container* (top-level) or an owning *Group Item*. *(P0)*
 - [ ] `REQ-3.1-09` The *Root Container* provides the owner interface its *Items* require: an `element` (the node the top-level *Item* views attach to), `depth = -1`, and array-like access (numeric keys, `length`, iteration) over its top-level *Items*. *(P0)*
 
