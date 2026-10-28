@@ -289,6 +289,18 @@ export function dropdownMode(control) {
         control.leaveDropDown('Escape');
         return true;
       },
+      /**
+       * Tab is the browser's own focus walk. The Filter is the component's single
+       * Tab stop and keeps the focus for the whole session (REQ-3.11-01,
+       * REQ-3.11-03), so while the keyboard is navigating the list a Tab would
+       * walk the page out from under the navigation and strand the interaction.
+       * The key is consumed instead, in both directions, and the focus stays on
+       * the Filter where it already is - nothing is moved, so there is nothing to
+       * move back. Leaving the list is Escape's and Enter's job (REQ-3.11-11,
+       * REQ-3.11-18), and away from this mode Tab still leaves the control as a
+       * single Tab stop promises.
+       */
+      Tab: () => true,
       ArrowDown: move,
       ArrowUp: move,
       ArrowRight: move,

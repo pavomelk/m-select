@@ -180,15 +180,31 @@ addEventListener(type, fn) {
    * Dispatches a bare event object to listeners registered for `type`, walking
    * up the `_parent` chain like a real DOM bubble phase. Listeners whose event
    * object defines `stopPropagation` can halt the walk.
+   *
+   * Two things the browser does that a bare event object does not are supplied
+   * here. `target` defaults to the node the event was dispatched on, which is
+   * what every listener reads and what the node it started at still reports
+   * after the event has bubbled. And an event that bubbles out of a tree whose
+   * root is `document.body` is delivered to `document` as well, because that is
+   * where the component's outside-click and stray-key listeners live; a detached
+   * tree takes its events with it, so a control that was never put on the page
+   * cannot answer another control's document listeners.
    */
   dispatchEvent(event) {
     this._listeners = this._listeners || {};
     const type = typeof event === 'string' ? event : event && event.type;
+    if (event && typeof event === 'object' && event.target === undefined) {
+      event.target = this;
+    }
     let el = this;
     while (el) {
       const list = (el._listeners && el._listeners[type]) || [];
       for (const fn of list) fn(event);
       if (event && event._propagationStopped) break;
+      if (!el._parent) {
+        if (el === document.body) document.dispatchEvent(event);
+        break;
+      }
       el = el._parent;
     }
   }
@@ -219,7 +235,27 @@ addEventListener(type, fn) {
     });
   }
 
-  contains() {
+  /**
+   * True for the node itself and for any descendant at any depth, as
+   * `Node#contains` is. `other` is followed up its own `_parent` chain rather
+   * than searched for among this node's children, so the answer is about the
+   * tree the nodes stand in and not about who holds whom directly: a chip's "x"
+   * is contained by the control's root, which holds neither of them directly.
+   *
+   * Anything that is not a node answers false rather than throwing. A real
+   * `contains` throws a TypeError for a non-node, but a stub event often carries
+   * no `target` at all, and the production code only ever asks this about
+   * `event.target` - which the browser guarantees is a node - so false keeps the
+   * "the pointer landed outside" reading those events are dispatched for.
+   * @param {*} other
+   */
+  contains(other) {
+    if (!other || typeof other !== 'object') return false;
+    let el = other;
+    while (el) {
+      if (el === this) return true;
+      el = el._parent || null;
+    }
     return false;
   }
 
