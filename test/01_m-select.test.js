@@ -767,6 +767,190 @@ describe('1. MSelect', () => {
       expect(root.visible).toBe(true);
       expect(sub.visible).toBe(false);
     });
+
+    it('1.6.8 options.filterFn replaces the built-in label match for the whole list', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { filterFn: (item) => item.value.startsWith('par') },
+        items: [
+          { value: 'paris', label: 'Paris' },
+          { value: 'london', label: 'London' },
+        ],
+      });
+
+      // The matcher answers for itself: the query names nothing in either label.
+      control.dropDown.filter('zzz');
+
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[1].visible).toBe(false);
+    });
+
+    it('1.6.9 a custom matcher is given the Item and the query as typed, case and all', () => {
+      const seen = [];
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: {
+          filterFn: (item, query) => {
+            seen.push([item.value, query]);
+            return item.label.startsWith(query);
+          },
+        },
+        items: [
+          { value: 'paris', label: 'Paris' },
+          { value: 'london', label: 'London' },
+        ],
+      });
+
+      control.dropDown.filter('Pa');
+
+      expect(seen).toEqual([
+        ['paris', 'Pa'],
+        ['london', 'Pa'],
+      ]);
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[1].visible).toBe(false);
+
+      // A case-folded query would still match here; the one typed does not.
+      control.dropDown.filter('pa');
+      expect(control.items[0].visible).toBe(false);
+    });
+
+    it('1.6.10 an empty query filters nothing and does not consult the custom matcher', () => {
+      const matcher = vi.fn(() => false);
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { filterFn: matcher },
+        items: [
+          { value: 'paris', label: 'Paris' },
+          { value: 'london', label: 'London' },
+        ],
+      });
+
+      control.dropDown.filter('');
+
+      expect(matcher).not.toHaveBeenCalled();
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[1].visible).toBe(true);
+    });
+
+    it('1.6.11 filterScope "all" applies to a custom matcher: a matching Group reveals its children', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: {
+          groupItems: { filterScope: 'all' },
+          filterFn: (item, query) => item.value === query,
+        },
+        items: [
+          {
+            label: 'Alpha Group',
+            value: 'group',
+            items: [
+              { value: 'alpha', label: 'Alpha' },
+              { value: 'beta', label: 'Beta' },
+            ],
+          },
+        ],
+      });
+
+      control.dropDown.filter('group');
+
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[0][0].visible).toBe(true);
+      expect(control.items[0][1].visible).toBe(true);
+    });
+
+    it('1.6.12 filterScope "matching" applies to a custom matcher: only matching children stay', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: {
+          groupItems: { filterScope: 'matching' },
+          filterFn: (item, query) => item.value === query || item.value === 'beta',
+        },
+        items: [
+          {
+            label: 'Alpha Group',
+            value: 'group',
+            items: [
+              { value: 'alpha', label: 'Alpha' },
+              { value: 'beta', label: 'Beta' },
+            ],
+          },
+        ],
+      });
+
+      control.dropDown.filter('group');
+
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[0][0].visible).toBe(false);
+      expect(control.items[0][1].visible).toBe(true);
+    });
+
+    it('1.6.13 assigning filterFn at runtime re-applies the current query and re-homes the marker', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          { value: 'paris', label: 'Paris' },
+          { value: 'london', label: 'London' },
+        ],
+      });
+
+      control.selectionBox.filter.query = 'on';
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+
+      control.filterFn = (item) => item.value === 'paris';
+
+      expect(typeof control.filterFn).toBe('function');
+      expect(control.items[0].visible).toBe(true);
+      expect(control.items[1].visible).toBe(false);
+      expect(control.dropDown.currentItem).toBe(control.items[0]);
+
+      control.filterFn = null;
+
+      // The built-in match is back, over the query the Filter still holds.
+      expect(control.filterFn).toBeUndefined();
+      expect(control.items[1].visible).toBe(true);
+      expect(control.items[0].visible).toBe(false);
+    });
+
+    it('1.6.14 a filterFn that is not a function is reported and the built-in match stays', () => {
+      const warn = vi.spyOn(specLog, 'warn').mockImplementation(() => {});
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { filterFn: 'label' },
+        items: [
+          { value: 'paris', label: 'Paris' },
+          { value: 'london', label: 'London' },
+        ],
+      });
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(control.filterFn).toBeUndefined();
+
+      control.dropDown.filter('on');
+      expect(control.items[0].visible).toBe(false);
+      expect(control.items[1].visible).toBe(true);
+
+      warn.mockRestore();
+    });
+
+    it('1.6.15 a custom matcher does not reach the selected-Items restriction', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        options: { filterFn: () => true },
+        items: [
+          { value: 'paris', label: 'Paris' },
+          { value: 'london', label: 'London' },
+        ],
+      });
+      control.items[1].toggle(true);
+
+      control.selectionBox.filter.displaySelected = true;
+
+      // The restricted list is a population, not a query: it is answered by
+      // `inSelection` whatever matcher the application supplied for text.
+      expect(control.items[0].visible).toBe(false);
+      expect(control.items[1].visible).toBe(true);
+    });
   });
 
   // requires: group toggle propagation to children, partiallySelected state

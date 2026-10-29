@@ -86,4 +86,4 @@ m-select/
 └── vite.config.js
 
 ## Open items to be clarified
-- Whatever is still open lives in requirements2.md §11, not here; the requirements themselves are written (165 of them).
+- Whatever is still open lives in requirements2.md §11, not here; the requirements themselves are written (169 of them).

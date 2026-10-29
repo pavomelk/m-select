@@ -6,9 +6,11 @@ import { MSelect } from './m-select.js';
  * This is the public surface applications build against. Only primitives and
  * plain values cross it — no `Item`, `DropDown`, `SelectionBox` or other
  * internal object is reachable — so a caller cannot reach in and desynchronise
- * the control's bookkeeping. It covers construction, reading and writing the
- * selection, the DropDown open state, the active mode, `cm-*` event
- * subscription and teardown.
+ * the control's bookkeeping. The one object handed to application code is the
+ * `Item` a {@link MSelectFacade#filterFn} is asked about, which is there to be
+ * read (`label`, `value`), not held or written. It covers construction, reading
+ * and writing the selection, the Filter's matching function, the DropDown open
+ * state, the active mode, `cm-*` event subscription and teardown.
  *
  * The underlying control stays available for tests and internals; application
  * code should use this facade.
@@ -65,7 +67,29 @@ export class MSelectFacade {
     return this.#control.items.length === 0;
   }
 
+  /**
+   * The function deciding whether an Item matches the Filter query, or
+   * `undefined` while the built-in label match is used. The Item it is asked
+   * about is the control's own, so it is for reading, not for keeping or
+   * writing.
+   * @type {((item: object, query: string) => boolean)|undefined}
+   */
+  get filterFn() {
+    return this.#control.filterFn;
+  }
+
   /* ---- writes ---- */
+
+  /**
+   * Replaces the Filter's matching function and re-filters the list by the
+   * query already in the Filter, re-homing the Current marker to it. Assigning
+   * `null` restores the built-in label match (REQ-5-09).
+   * @param {((item: object, query: string) => boolean)|null} fn
+   */
+  set filterFn(fn) {
+    this.#assertAlive();
+    this.#control.filterFn = fn;
+  }
 
   /**
    * Selects the Item carrying `value`.

@@ -6,7 +6,7 @@ Vanilla JS multi-select combobox/listbox with hierarchical items, filtering, key
 
 - **Hierarchical items** - Forest-like tree of groups and selectable leaves
 - **Multi-select with chips** - Selected items appear as removable chips in the always-visible Selection Box
-- **Filtering** - Type to narrow the dropdown list with live re-filtering
+- **Filtering** - Type to narrow the dropdown list with live re-filtering, with an optional custom matching function
 - **Keyboard navigation** - Full keyboard support across modes (Filter, Dropdown, Chip, Collapsed)
 - **Select All / Clear All** - Bulk actions over visible selectable items
 - **Collapsed chips** - Summarizes large selections into a single chip with configurable threshold
@@ -93,6 +93,7 @@ Value-based public API (no internal objects exposed).
 | `set values(array)` | Programmatically set selection by values |
 | `get mode()` | Current input mode (`'filter' \| 'dropdown' \| 'chip' \| 'collapsed'`) |
 | `get isEmpty()` | True if no items loaded (useful with `delayedLoad`) |
+| `get filterFn()` / `set filterFn(fn)` | Custom query matcher; assign to replace, `null` to restore the built-in label match |
 | `get el()` | Root element of the control |
 | `open()` / `close()` | Toggle dropdown visibility |
 | `select(value)` / `unselect(value)` / `toggle(value)` | Modify selection |
@@ -108,6 +109,7 @@ Full component API with access to internals.
 |---|---|
 | `constructor(hostElement, config)` | Create and mount control |
 | `get selectedValues()` / `set selectedValues(values)` | Get/set selection by values (settles in one pass) |
+| `get filterFn()` / `set filterFn(fn)` | Get/replace the query matcher at runtime |
 | `get selectedItems()` | Currently selected Item objects |
 | `get mode` / `set mode` | Get/set input mode |
 | `setItems(specs, selectedValues?)` | One-time tree instantiation (throws if called twice) |
@@ -130,6 +132,31 @@ Full component API with access to internals.
 | `align` | `object` | — | Per-depth layout: `{ depth: { flow: 'row'\|'column' } \| 'row'\|'column' }` |
 | `groupItems.toggleScope` | `'visible'\|'all'` | `'visible'` | What a group toggle affects |
 | `groupItems.filterScope` | `'matching'\|'all'` | `'matching'` | What remains visible when group label matches filter |
+| `filterFn` | `(item, query) => boolean` | — | Custom matcher replacing the built-in label match |
+
+### Custom filtering
+
+By default an item matches when its `label` contains the query, case-insensitively. `filterFn` replaces that decision. It is called with the internal `Item` (read `label`, `value`, position in the tree) and the query exactly as typed, and is asked about groups too — a group that matches reveals its children per `groupItems.filterScope`. An empty query always shows every item and does not call the function.
+
+```js
+const synonyms = { paris: ['france', 'fr'], london: ['uk', 'england'] };
+const facade = new MSelectFacade(host, {
+  items,
+  options: {
+    filterFn: (item, query) => {
+      const q = query.toLowerCase();
+      return (
+        item.label.toLowerCase().includes(q) ||
+        (synonyms[item.value] || []).some((word) => word.includes(q))
+      );
+    },
+  },
+});
+
+// Replace it at runtime, or drop back to the built-in label match.
+facade.filterFn = (item, query) => item.value.startsWith(query);
+facade.filterFn = null;
+```
 
 ## Item Specification
 
@@ -222,7 +249,7 @@ Tests use Vitest with Node environment and a custom DOM stub (`test/dom-stub.js`
 npx vitest run
 ```
 
-Current test suite: **475 tests passing** across 2 test files.
+Current test suite: **495 tests passing** across 2 test files.
 
 ## Browser Support
 

@@ -55,6 +55,30 @@ export class Logger {
 const normalizeBool = (value) => value !== false && String(value) !== 'false';
 
 /**
+ * Reads the `filterFn` option (REQ-5-09): a function is the custom matcher, and
+ * anything else is "no custom matcher", which is the built-in label match.
+ *
+ * A wrongly-typed value is reported rather than thrown at, because the option
+ * comes from application code and a misspelt value should leave a working
+ * control rather than break the page. The report is the same kind the spec
+ * warnings are (REQ-3.2-11): the option says something the component cannot
+ * take literally, so it is read the only way it can be and the author is told.
+ * `null` and `undefined` are how "none" is meant, so they are silent.
+ * @param {*} value
+ * @returns {((item: Item, query: string) => boolean)|undefined}
+ */
+const readFilterFn = (value) => {
+  if (value == null) return undefined;
+  if (typeof value === 'function') return value;
+  specLog.warn(
+    `options.filterFn should be a function, but ${JSON.stringify(
+      value
+    )} is being read as "no custom filter". The built-in label match is used instead.`
+  );
+  return undefined;
+};
+
+/**
  * Reads an Item's `value`, treating `null`, `undefined` and the empty string as
  * the absence of a value rather than as values in their own right. An Item with
  * no value is not selectable (REQ-3.2-05) and owns no Chip, so it would be wrong
@@ -1279,6 +1303,25 @@ export class Filter {
     }
   }
 
+  /**
+   * Re-derives the visible list after the application replaced the matching
+   * function (`options.filterFn`, REQ-5-09). A query change in all but name, so
+   * it takes the same path and re-homes the Current marker to the list it
+   * produced (REQ-3.11-19): a marker the new matcher hides cannot stay standing.
+   *
+   * While the selected-Items restriction is on, that list is what is on screen —
+   * the text query is not — so the restriction is re-applied instead and the new
+   * matcher waits for the next query, as it must: the restriction keeps its own
+   * matcher and its own marker rule (REQ-3.11-27).
+   */
+  applyMatcher() {
+    if (this.#displaySelected) {
+      this.refilter();
+      return;
+    }
+    this.#applyQuery(this.query);
+  }
+
   /** @private backing field for displaySelected */
   #displaySelected = false;
 
@@ -1806,9 +1849,23 @@ class DropDown {
   }
 
 /**
-   * Filters the Item tree by Item label. The default matching function keeps an
-   * Item visible when its label contains `textValue` (case-insensitive). An
-   * empty value shows every Item.
+   * Filters the Item tree by the text query: an Item is visible when it matches,
+   * and a Group Item when it matches or one of its children is visible.
+   *
+   * Which Items match is answered by `options.filterFn` when the application
+   * supplied one, and by the built-in rule otherwise: the Item's label contains
+   * the query, case-insensitively (REQ-3.9-03). A custom matcher is given the
+   * Item and the query exactly as typed — not case-folded, not trimmed — and it
+   * is asked about Group Items too, because it answers for one Item at a time
+   * and a Group's own match is what `filterScope` reads. It replaces the
+   * matching decision only: what a matching Group reveals stays
+   * `groupItems.filterScope`'s answer, for every matcher alike (REQ-5-06).
+   *
+   * An empty query filters nothing: no matcher is consulted and every Item is
+   * shown (REQ-3.9-04). The query is what narrows the list, so no text is no
+   * narrowing. The selected-Items-only restriction is not a query — it passes
+   * its own `matchFn`, which is consulted whatever the text, and it is never
+   * combined with `options.filterFn`.
    *
    * Visibility of a Group Item's children follows `groupItems.filterScope`:
    * - `'all'` (default): a matching Group Item shows all of its children.
@@ -1822,29 +1879,47 @@ class DropDown {
    * to match - a child can be visible because its Group matched without matching
    * the query itself, so "visible" is not a filtering answer the way "matching"
    * is not a toggling one.
-   * @param {string} textValue
-   * @param {(item: Item, textValue: string) => boolean} [matchFn]
+   * @param {string} textValue the query, as typed
+   * @param {(item: Item, query: string) => boolean} [matchFn] a matcher of its
+   *   own, used instead of the query's; the selected-Items restriction passes one
    */
   filter(textValue, matchFn) {
     const query = String(textValue || '');
-    const q = query.toLowerCase();
-    const customMatcher = typeof matchFn === 'function';
-    const matcher = matchFn || ((item) => item.label.toLowerCase().includes(q));
+    // At most one of the two answers is in play: an explicit matcher is the
+    // restriction speaking, not the query, and the application's `filterFn` is
+    // the query's own replacement.
+    const restriction = typeof matchFn === 'function' ? matchFn : null;
+    const custom =
+      !restriction && typeof this.control.options.filterFn === 'function'
+        ? this.control.options.filterFn
+        : null;
     const scope = this.control.options.groupItems?.filterScope || 'all';
+
+    // Whether the Item matches in its own right, under whichever matcher is at
+    // play.
+    const matches = (item) => {
+      if (restriction) return Boolean(restriction(item, query));
+      if (query === '') return true;
+      if (custom) return Boolean(custom(item, query));
+      return item.label.toLowerCase().includes(query.toLowerCase());
+    };
 
     const apply = (items) => {
       for (const item of items) {
         if (item.isGroup) {
-          const selfMatch = customMatcher ? matcher(item, q) : q === '' || matcher(item, q);
+          const selfMatch = matches(item);
           apply(item);
-          if (selfMatch && scope === 'all' && !customMatcher) {
+          // Not for the restriction: it is a population of selected Items, so a
+          // Group on it stands for its selected children and must not reveal the
+          // unselected ones beside them.
+          if (selfMatch && scope === 'all' && !restriction) {
             for (const child of item) {
               child.visible = true;
             }
           }
           item.visible = selfMatch || [...item].some((child) => child.visible);
         } else {
-          item.visible = customMatcher ? matcher(item, q) : q === '' || matcher(item, q);
+          item.visible = matches(item);
         }
       }
     };
@@ -2088,6 +2163,8 @@ export class MSelect {
     // has a control to report to. An explicit logLevel governs them too, so
     // 'silent' means silent; left unset, they keep their visible default.
     if (this.options.logLevel !== undefined) specLog.setLevel(this.options.logLevel);
+    // Normalized once here so every filter pass reads a function or nothing.
+    this.options.filterFn = readFilterFn(this.options.filterFn);
 
     this.#modes = new Modes(MODES.FILTER, (from, to) => {
       this.#markMode(to);
@@ -2788,6 +2865,32 @@ export class MSelect {
   setChipPlaceOrder(order) {
     this.options.chipPlaceOrder = order;
     this.render();
+  }
+
+  /**
+   * The function deciding whether an Item matches the Filter query: the
+   * application's `filterFn`, or `undefined` while the built-in label match is
+   * in effect (REQ-5-09).
+   * @returns {((item: Item, query: string) => boolean)|undefined}
+   */
+  get filterFn() {
+    // Read defensively: `options` is public, so the field can be written past
+    // this accessor, and a non-function is "no custom matcher" everywhere else.
+    const fn = this.options.filterFn;
+    return typeof fn === 'function' ? fn : undefined;
+  }
+
+  /**
+   * Replaces the matching function at runtime and re-derives the visible list
+   * from the query the Filter already holds, re-homing the Current marker to it
+   * as a query change does (REQ-3.11-19). Assigning `null` or `undefined`
+   * restores the built-in label match; any other non-function is reported and
+   * read as "none" rather than thrown at (REQ-5-09).
+   * @param {((item: Item, query: string) => boolean)|null|undefined} fn
+   */
+  set filterFn(fn) {
+    this.options.filterFn = readFilterFn(fn);
+    this.selectionBox.filter.applyMatcher();
   }
 
   /**

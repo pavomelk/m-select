@@ -291,4 +291,56 @@ describe('2. MSelectFacade', () => {
       expect(() => facade.select('a')).toThrow(/destroyed/);
     });
   });
+
+  describe('2.6 Filtering', () => {
+    const findFilterInput = (node) => {
+      if (node.type === 'text') return node;
+      for (const child of node.children || []) {
+        const found = findFilterInput(child);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    it('2.6.1 filterFn is absent until the application supplies one', () => {
+      const { facade } = build();
+
+      expect(facade.filterFn).toBeUndefined();
+    });
+
+    it('2.6.2 assigning filterFn replaces the matcher and null restores the built-in match', () => {
+      const { facade } = build();
+      const matcher = () => false;
+
+      facade.filterFn = matcher;
+      expect(facade.filterFn).toBe(matcher);
+
+      facade.filterFn = null;
+      expect(facade.filterFn).toBeUndefined();
+    });
+
+    it('2.6.3 the matcher the application supplies is the one the Filter narrows with', () => {
+      vi.useFakeTimers();
+      const seen = [];
+      const { facade } = build(
+        {},
+        {
+          filterFn: (item, query) => {
+            seen.push(query);
+            return item.label.startsWith(query);
+          },
+        }
+      );
+      const input = findFilterInput(facade.el);
+
+      input.value = 'A';
+      input.dispatchEvent({ type: 'input' });
+      vi.advanceTimersByTime(300);
+
+      // Three Items, and the query reaches the matcher as typed rather than
+      // case-folded, so `startsWith('A')` is the application's own decision.
+      expect(seen).toEqual(['A', 'A', 'A']);
+      vi.useRealTimers();
+    });
+  });
 });
