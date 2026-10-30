@@ -95,7 +95,11 @@ restarting at the top. From there `ArrowLeft` and `ArrowRight` walk between
 Chips, `Delete` removes the Current one and passes Current to the next — or to
 the last, when there is no next — and `Backspace` removes the Chip to the left of
 the Current one while keeping the marker where it is. `ArrowRight` on the
-rightmost Chip leaves chip navigation and returns to the Filter.
+rightmost Chip leaves chip navigation and returns to the Filter. Once the
+Drop Down has handed the keyboard to the list, `Escape` returns to the Chips
+while the Current Item is still one of them; on an unselected Item there is no
+Chip to resume on, so it leaves chip navigation, closes the list and returns to
+an editable, focused Filter.
 
 "Remove all" is a single click: it clears the selection, empties the Selection
 Box and reopens the Drop Down, which is the same starting position as a fresh
