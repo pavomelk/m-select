@@ -68,7 +68,7 @@
   align-items: center;
   gap: 4px;
   padding: 2px 6px;
-  border-radius: 12px;
+  border-radius: var(--cm-radius);
   background: var(--cm-selected-bg);
   border: 1px solid transparent;
   cursor: default;
