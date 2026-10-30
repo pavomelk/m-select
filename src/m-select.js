@@ -2658,8 +2658,28 @@ export class MSelect {
    * @param {Event} e
    */
   #onDocumentKeyDown(e) {
-    if (!this.el.contains(e.target) && !this.dropDown.open) return;
-    this.onKeyDown(e);
+    // Only handle keys if they originate inside this control, or if this control's
+    // dropdown is open and focus remains inside this control. Never hijack keys
+    // intended for other controls on the page.
+    if (this.el.contains(e.target)) {
+      this.onKeyDown(e);
+      return;
+    }
+    if (this.dropDown.open) {
+      const active = document.activeElement;
+      if (active && this.el.contains(active)) {
+        this.onKeyDown(e);
+        return;
+      }
+      // For document-level routing when dropdown is open (e.g. focus lost to body),
+      // only handle if the target is document/body or explicitly routed for this control
+      if (e.target === document || e.target === document.body || !document.activeElement || !document.activeElement.tagName) {
+        this.onKeyDown(e);
+        return;
+      }
+      return;
+    }
+    return;
   }
 
   /** Focus on the Filter means entering the default Filter mode.
