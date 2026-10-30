@@ -5,9 +5,170 @@
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>m-select — basic visual prototype</title>
+    <link rel="stylesheet" href="../src/m-select.css" />
+    <style>
+      body {
+        margin: 24px;
+        font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        color: #1f2937;
+      }
+
+      m-select {
+        display: block;
+        margin: 24px 0;
+      }
+
+      .demo-neighbor {
+        margin: 12px 0;
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="./main.js"></script>
+    <h1>m-select — basic visual prototype</h1>
+    <p>
+      Selection Box always visible. Click items in the Drop Down to toggle; click
+      chip "x" to remove, filter to narrow, "Select All" tops the list,
+      maxVisibleChips = 4 collapses chips into a summary. Submit to see the values
+      the enclosing form would send.
+    </p>
+
+    <form id="mselect-form">
+      <m-select>
+        <script type="application/json">
+          {
+            "items": [
+              { "label": "Alpha", "value": "alpha" },
+              {
+                "label": "Beta",
+                "value": "beta",
+                "selectable": "false",
+                "tooltip": "Shown for reference only - this one cannot be selected"
+              },
+              {
+                "label": "Kappa",
+                "value": "kappa",
+                "tooltip": "Kappa is selectable, unlike Beta"
+              },
+              {
+                "label": "Cities",
+                "tooltip": "A group - hovering the group title shows this, its children have their own",
+                "items": [
+                  { "label": "Paris", "value": "paris", "tooltip": "Capital of France" },
+                  { "label": "London", "value": "london" },
+                  {
+                    "label": "New-York",
+                    "value": "new-york",
+                    "tooltip": "Not the capital of the USA"
+                  }
+                ]
+              },
+              {
+                "label": "Sandwich",
+                "items": [
+                  { "label": "Tuna", "value": "tuna" },
+                  {
+                    "label": "Vegetables",
+                    "value": "just-grass",
+                    "tooltip": "Vegan"
+                  },
+                  { "label": "Egg", "value": "egg" }
+                ]
+              },
+              {
+                "label": "Levels",
+                "items": [
+                  {
+                    "label": "Level 2",
+                    "items": [
+                      { "label": "Level 2.1", "value": "l2.1" },
+                      { "label": "Level 2.2", "value": "l2.2" },
+                      { "label": "Level 2.3" },
+                      {
+                        "label": "Level 2.4",
+                        "items": [
+                          { "label": "Level 2.4.1", "value": "l2.4.1" },
+                          { "label": "Level 2.4.2", "value": "l2.4.2" }
+                        ]
+                      },
+                      { "label": "Level 2.5", "value": "l2.5" }
+                    ]
+                  },
+                  {
+                    "label": "Level 3",
+                    "items": [
+                      { "label": "Level 3.1", "value": "l3.1" },
+                      { "label": "Level 3.2" },
+                      { "label": "Level 3.3", "value": "l3.3" }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "options": {
+              "name": "mselect",
+              "placeholder": "Type to filter...",
+              "maxVisibleItems": 8,
+              "chipPlaceOrder": "unsorted",
+              "logLevel": "silent",
+              "align": {
+                "1": { "flow": "row" },
+                "3": "row"
+              },
+              "groupItems": {
+                "toggleScope": "visible",
+                "filterScope": "matching"
+              },
+              "maxVisibleChips": 4
+            }
+          }
+        </script>
+      </m-select>
+      <button type="submit">Submit</button>
+    </form>
+
+    <pre id="mselect-state">selected values: []</pre>
+
+    <div class="demo-neighbor">
+      <label for="neighbor-input">Focus target next to the control: </label>
+      <input
+        id="neighbor-input"
+        type="text"
+        placeholder="Tab or click here to leave the control"
+      />
+    </div>
+
+    <pre id="mselect-submitted">submitted: (nothing yet)</pre>
+
+    <script type="module">
+      import './../src/m-select-element.js';
+
+      const host = document.querySelector('m-select');
+      const form = document.getElementById('mselect-form');
+      const state = document.getElementById('mselect-state');
+      const submitted = document.getElementById('mselect-submitted');
+
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const payload = new URLSearchParams(new FormData(form)).toString();
+        submitted.textContent = 'submitted: ' + (payload || '(no values)');
+      });
+
+      const initControl = (control) => {
+        const reflect = () => {
+          state.textContent =
+            'selected values: ' +
+            JSON.stringify(control.values) +
+            '   mode: ' +
+            control.mode;
+        };
+        control.on('cm-selection-change', reflect);
+        control.on('cm-mode-change', reflect);
+        reflect();
+        window.control = control;
+      };
+
+      if (host.control) initControl(host.control);
+      else host.addEventListener('cm-ready', (event) => initControl(event.detail.control));
+    </script>
   </body>
 </html>

@@ -65,9 +65,9 @@ Before creating code:
 ## Structure
 m-select/
 ├── src/
-│   ├── main.js               (demo entry: imports the CSS, instantiates the demo facade)
 │   ├── m-select.js           (the component)
 │   ├── m-select-facade.js    (value-based public facade the demo and apps use)
+│   ├── m-select-element.js   (<m-select> custom element wrapper)
 │   ├── modes.js              (per-input-mode definitions: onEntry/onLeave/handlers)
 │   └── m-select.css
 ├── test/

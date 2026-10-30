@@ -12,6 +12,7 @@ Vanilla JS multi-select combobox/listbox with hierarchical items, filtering, key
 - **Collapsed chips** - Summarizes large selections into a single chip with configurable threshold
 - **Form integration** - Hidden inputs mirror selection for standard form submission
 - **Programmatic control** - Rich API via `MSelect` or value-based `MSelectFacade`
+- **Declarative HTML** - Mount with `<m-select>` and an inline JSON config, no bootstrap script
 - **Events** - Custom `cm-*` events for open/close, mode changes, and selection changes
 - **Lazy loading** - Optional `delayedLoad` with `cm-items-request`/`setItems` flow
 - **Tooltips** - Per-item and group tooltips
@@ -20,14 +21,14 @@ Vanilla JS multi-select combobox/listbox with hierarchical items, filtering, key
 
 ## Demo
 
-The included demo uses a **permissions matrix** example (roles × capabilities). To run it locally:
+The demo is driven entirely from `demo/index.html`: it declares an `<m-select>` element with its item tree and options in an inline JSON config, and imports `src/m-select-element.js` to register the element. To run it locally:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open [http://localhost:5173/demo/index.html](http://localhost:5173/demo/index.html). The demo shows the control wired with `MSelectFacade`, form submission, and live mode/selection readout.
+Open [http://localhost:5173/demo/index.html](http://localhost:5173/demo/index.html). The demo shows declarative mounting, form submission, and live mode/selection readout.
 
 ## Installation
 
@@ -38,11 +39,33 @@ npm install
 npm run build
 ```
 
-Built assets go to `dist/`. For integration, you can copy `src/m-select.js`, `src/m-select-facade.js`, `src/modes.js`, and `src/m-select.css` into your project, or import them directly in a bundler that supports ES modules.
+Built assets go to `dist/`. For integration, you can copy `src/m-select.js`, `src/m-select-facade.js`, `src/m-select-element.js`, `src/modes.js`, and `src/m-select.css` into your project, or import them directly in a bundler that supports ES modules.
 
 ## Quick Start
 
-### Using MSelectFacade (recommended)
+### Using the `<m-select>` element
+
+```html
+<link rel="stylesheet" href="./src/m-select.css" />
+<script type="module" src="./src/m-select-element.js"></script>
+
+<m-select>
+  <script type="application/json">
+    {
+      "items": [
+        { "label": "Viewer", "value": "viewer" },
+        { "label": "Editor", "value": "editor" },
+        { "label": "Admin", "value": "admin" }
+      ],
+      "options": { "name": "permissions", "placeholder": "Select roles..." }
+    }
+  </script>
+</m-select>
+```
+
+The element reads `{ items, options }` from its child JSON script and fires `cm-ready` with `{ control }` once mounted. `element.control` is the live `MSelectFacade`. Form submission works through the enclosing `<form>` when `options.name` is set.
+
+### Using MSelectFacade (recommended for programmatic control)
 
 ```js
 import MSelectFacade from './src/m-select-facade.js';
@@ -247,8 +270,8 @@ m-select/
 ├── src/
 │   ├── m-select.js           # Core component
 │   ├── m-select-facade.js    # Value-based facade
+│   ├── m-select-element.js   # <m-select> custom element wrapper
 │   ├── modes.js              # Mode definitions and handlers
-│   ├── main.js               # Demo entry
 │   └── m-select.css
 ├── test/                     # one file per area (see Testing)
 │   ├── 01_items-and-selection.test.js
@@ -258,7 +281,7 @@ m-select/
 │   ├── teardown.js           # destroys controls a test leaves alive
 │   └── dom-stub.js           # minimal DOM stub
 ├── demo/
-│   ├── index.html
+│   ├── index.html            # declarative <m-select> demo (Vite build entry)
 │   └── favicon.svg
 ├── project/                  # Requirements, use cases, specs
 └── vite.config.js
