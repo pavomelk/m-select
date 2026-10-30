@@ -62,7 +62,10 @@ From there the arrow keys move the Current Item and do nothing else. They are
 consumed by the list rather than by the page, so walking a long list does not
 scroll the document out from under the control. The system focus stays in the
 Filter for the whole session, so the caret never gets in the way of the list, and
-no element inside the control takes part in the Tab sequence.
+no element inside the control takes part in the Tab sequence. While the list is
+open `Tab` and `Shift+Tab` are held as well, however the list was opened, so the
+focus cannot leave the control until the list is closed with `Escape`, `Enter`,
+or the mouse gesture that closes it.
 
 ### Taking options
 

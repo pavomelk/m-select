@@ -2642,6 +2642,10 @@ export class MSelect {
   onKeyDown(e) {
     if (e.__mselectHandledBy === this) return;
     e.__mselectHandledBy = this;
+    if (e.key === 'Tab' && this.dropDown.open) {
+      e.preventDefault?.();
+      return;
+    }
     if (this.#modes.processKey(e)) {
       e.preventDefault?.();
     }

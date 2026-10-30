@@ -781,12 +781,13 @@ describe('1. MSelect — Selection, form and events', () => {
   });
 
   // requires: REQ-3.11-01, REQ-3.11-03, REQ-3.11-13 — the Filter holds the focus
-  // for the whole session, and in DropDown mode the keyboard has gone into the
-  // list. Tab is the browser's own focus walk, so leaving it to the browser there
-  // walks the page out from under the navigation; it is consumed instead and the
-  // focus stays on the Filter. Leaving the list is Escape's and Enter's job, and
-  // away from DropDown mode Tab still does what a single Tab stop promises.
-  describe('47. Keyboard - Tab does not walk the page while DropDown mode is active', () => {
+  // for the whole session, and an open DropDown is part of the interaction in
+  // progress whether it was opened by a key or a mouse click. Tab is the
+  // browser's own focus walk, so leaving it to the browser while the list is open
+  // walks the page out from under the user; it is consumed instead and the focus
+  // stays on the Filter. Leaving the list is Escape's and Enter's job, and with
+  // the DropDown closed Tab still does what a single Tab stop promises.
+  describe('47. Keyboard - Tab does not walk the page while the DropDown is open', () => {
     const setup = () => {
       const host = document.createElement('div');
       return new MSelect(host, {
@@ -847,10 +848,11 @@ describe('1. MSelect — Selection, form and events', () => {
       expect(mode(control)).toBe('dropdown');
     });
 
-    it('1.47.3 Tab in Filter mode is left to the browser, so the component can still be left by Tab', () => {
+    it('1.47.3 Tab in Filter mode with the DropDown closed is left to the browser, so the component can still be left by Tab', () => {
       const control = setup();
       const el = focusFilter(control);
       expect(mode(control)).toBe('filter');
+      expect(control.dropDown.open).toBe(false);
 
       const prevented = keydown(el, 'Tab');
 
@@ -887,6 +889,40 @@ describe('1. MSelect — Selection, form and events', () => {
       expect(mode(control)).toBe('filter');
       expect(el.readOnly).toBe(false);
       expect(document.activeElement).toBe(el);
+    });
+
+    it('1.47.6 Tab after a mouse click opened the DropDown is consumed and leaves the focus on the Filter', () => {
+      const control = setup();
+      const el = focusFilter(control);
+
+      control.selectionBox.filter.el.click();
+      expect(mode(control)).toBe('filter');
+      expect(control.dropDown.open).toBe(true);
+
+      const prevented = keydown(el, 'Tab');
+
+      expect(prevented.value).toBe(true);
+      expect(document.activeElement).toBe(el);
+      expect(mode(control)).toBe('filter');
+      expect(control.dropDown.open).toBe(true);
+    });
+
+    it('1.47.7 Shift+Tab in Chip mode with an open DropDown is consumed too', () => {
+      const control = setup();
+      const el = focusFilter(control);
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      keydown(el, 'ArrowLeft');
+      expect(mode(control)).toBe('chip');
+      keydown(el, 'ArrowDown');
+      expect(control.dropDown.open).toBe(true);
+
+      const prevented = keydown(el, 'Tab', { shiftKey: true });
+
+      expect(prevented.value).toBe(true);
+      expect(document.activeElement).toBe(el);
+      expect(mode(control)).toBe('chip');
+      expect(control.dropDown.open).toBe(true);
     });
   });
 
