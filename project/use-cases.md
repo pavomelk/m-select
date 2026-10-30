@@ -36,10 +36,12 @@ Item, so the field answers "what is picked" on its own.
 ### Narrowing
 
 Clicking the Filter opens the Drop Down without marking anything, so a user who
-only wants to look has not also moved a highlight. Typing opens the Drop Down the
-moment the first character lands — changing the query is itself a wish to see the
-list — and narrows it to the matches, settling the Current marker against the list
-the query just produced: the marker always lands on the first selectable match
+only wants to look has not also moved a highlight; clicking it again while the
+list is open closes the list, leaving the highlight wherever it stands. Typing
+opens the Drop Down the moment the first character lands — changing the query is
+itself a wish to see the list — and narrows it to the matches, settling the
+Current marker against the list the query just produced: the marker always lands
+on the first selectable match
 of the new list, so an Item the previous query happened to leave standing does
 not keep it, and a query that matches nothing clears the marker rather than
 pointing at something off-screen. The first selectable match is what the user is

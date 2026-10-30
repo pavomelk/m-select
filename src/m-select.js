@@ -2607,7 +2607,7 @@ export class MSelect {
 
     if (target === this.selectionBox.filter.el) {
       this.#activateFilter();
-      this.dropDown.open = true;
+      this.dropDown.open = !this.dropDown.open;
       return;
     }
 

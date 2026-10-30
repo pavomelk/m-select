@@ -424,7 +424,7 @@ describe('1. MSelect — Keyboard in the DropDown', () => {
       expect(control.dropDown.currentItem).toBe(control.items[1]);
     });
 
-    it('1.34.3 clicking the Filter while the DropDown is already open leaves the marker', () => {
+    it('1.34.3 clicking the Filter while the DropDown is already open closes it and leaves the marker', () => {
       const control = setup();
       control.selectionBox.filter.el.click();
       control.dropDown.setCurrent(control.items[2]);
@@ -432,6 +432,20 @@ describe('1. MSelect — Keyboard in the DropDown', () => {
       control.selectionBox.filter.el.click();
 
       expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(control.dropDown.open).toBe(false);
+    });
+
+    it('1.34.4 repeated Filter clicks keep toggling the DropDown', () => {
+      const control = setup();
+      const filter = control.selectionBox.filter.el;
+
+      filter.click();
+      expect(control.dropDown.open).toBe(true);
+
+      filter.click();
+      expect(control.dropDown.open).toBe(false);
+
+      filter.click();
       expect(control.dropDown.open).toBe(true);
     });
   });
