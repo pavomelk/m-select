@@ -36,6 +36,9 @@
   - Test files are numbered by area: `01_<area>.test.js`, `02_<area>.test.js`, …
   - Inside a file, `describe` levels are numbered (`1. …`, `1.1 …`, …) and each `it` gets the full hierarchical number (`1.1.1 …`).
   - Assign a new number whenever a new area or behavior is covered; never reuse a number.
+  - The suite is split by topic, not kept in one big file: areas 1-5 live in `01_items-and-selection`, 6-7 in `03_filtering-and-groups`, 8-11 in `04_chips`, 12-15 in `05_modes`, 16-21 in `06_clicks-and-lifecycle`, 22-29 in `07_keyboard-chips`, 30 in `09_keyboard-collapsed`, 31-37 in `10_keyboard-dropdown`, 38-40 in `11_layout-and-structure`, 41-48 in `12_selection-form-and-events`; the facade (prefix 2) is `02`, the tree API (area 49) is `08`.
+  - `test/13_numbering-guard.test.js` enforces this: unique ids across the suite, each id prefixed by its file's top-level and area numbers, no letter suffixes or deeper nesting, file prefixes unique and gapless, and each area declared once. Renumbering to fix a mistake is fine; a duplicate is not.
+- Every test file imports `test/teardown.js`. It registers the controls a test constructs and destroys the ones still alive after it, then fails the test if a document listener survived — the stub document is shared by the whole file, so a leaked control answers the next test's `mousedown`/`keydown`. A `delayedLoad` control that is never given Items is not observable to the registry; tests that build one destroy it themselves.
 
 ## Code quality
 - ESLint
@@ -47,7 +50,7 @@
 - project/requirements.md — earlier requirements, partly superseded; kept for history
 - project/requirements2.md — the current requirements
 - project/use-cases.md — real-world scenarios; the normative source of the mouse and keyboard interaction (REQ-7-09)
-- README.md — to be written (not present yet)
+- README.md — the API reference, usage examples and test overview
 
 ## Development workflow
 Before creating code:
@@ -68,8 +71,20 @@ m-select/
 │   ├── modes.js              (per-input-mode definitions: onEntry/onLeave/handlers)
 │   └── m-select.css
 ├── test/
-│   ├── 01_m-select.test.js   (hierarchically numbered: `describe` 1. N, `it` 1.N.M)
-│   ├── 02_m-select-facade.test.js (hierarchically numbered: `describe` 2. N, `it` 2.N.M)
+│   ├── 01_items-and-selection.test.js
+│   ├── 02_m-select-facade.test.js
+│   ├── 03_filtering-and-groups.test.js
+│   ├── 04_chips.test.js
+│   ├── 05_modes.test.js
+│   ├── 06_clicks-and-lifecycle.test.js
+│   ├── 07_keyboard-chips.test.js
+│   ├── 08_m-select-tree-api.test.js
+│   ├── 09_keyboard-collapsed.test.js
+│   ├── 10_keyboard-dropdown.test.js
+│   ├── 11_layout-and-structure.test.js
+│   ├── 12_selection-form-and-events.test.js
+│   ├── 13_numbering-guard.test.js (enforces the numbering convention)
+│   ├── teardown.js           (destroys controls a test leaves alive)
 │   └── dom-stub.js           (minimal DOM stub, for environment: 'node')
 ├── project/
 │   ├── AGENTS.md

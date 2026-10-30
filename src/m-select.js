@@ -15,6 +15,20 @@ const LOG_LEVELS = ['silent', 'error', 'warn', 'info', 'debug'];
 const PRESET_SELECTION_LIMIT = 50;
 const PRESET_MAX_VISIBLE_CHIPS = 25;
 
+/**
+ * The view state `Item#syncView` last applied to an Item's DOM, as bits.
+ *
+ * A render used to write every class of every Item on every pass, so a filter
+ * keystroke over a few thousand Items produced a few thousand no-op DOM writes. 
+ * Comparing these bits first turns an unchanged Item into a handful of reads, and
+ * a changed one into writes for the fields that actually moved. `#appliedView`
+ * is `null` until the first sync, which forces that first full application.
+ */
+const VIEW_HIDDEN = 1;
+const VIEW_SELECTED = 2;
+const VIEW_PARTIAL = 4;
+const VIEW_TICKED = 8;
+
 import { MODES, REDISPATCH, filterMode, dropdownMode, chipMode, collapsedMode } from './modes.js';
 
 /**
@@ -151,10 +165,21 @@ export const specLog = new Logger('warn');
  * @param {number} depth depth of the Items the level holds
  * @returns {{flow: 'row'|'column'}}
  */
+/**
+ * The two answers `levelConfig` can give. Shared and frozen: layout is read per
+ * Item on every render, and a fresh `{flow}` object per read would allocate once
+ * per Item per pass for a value that never changes. Callers treat these as
+ * read-only, which is what freezing enforces.
+ */
+const LAYOUT = Object.freeze({
+  row: Object.freeze({ flow: 'row' }),
+  column: Object.freeze({ flow: 'column' }),
+});
+
 const levelConfig = (options, depth) => {
   const entry = (options && options.align && options.align[depth]) || {};
   const config = typeof entry === 'string' ? { flow: entry } : entry;
-  return { flow: config.flow === 'row' ? 'row' : 'column' };
+  return config.flow === 'row' ? LAYOUT.row : LAYOUT.column;
 };
 
 /**
@@ -244,6 +269,7 @@ export class RootContainer {
    */
   add(item) {
     const index = this.#children.length;
+    item.childIndex = index;
     this.#children.push(item);
     Object.defineProperty(this, index, {
       get: () => this.#children[index],
@@ -273,23 +299,92 @@ export class RootContainer {
    * @returns {Item[]} the Items inserted, in their new order
    */
   insertBefore(item, before) {
-    if (before === undefined) return this.#indexSubtree(this.add(item));
-    const childAt = this.#children.indexOf(before);
-    if (childAt < 0) {
-      throw new Error('insertBefore: the reference Item is not a top-level Item of this container');
+    const flatAt = before === undefined ? this.#all.length : this.#all.indexOf(before);
+    if (flatAt < 0) {
+      throw new Error('insertBefore: the reference Item is not in this tree');
     }
-    const flatAt = this.#all.indexOf(before);
-    this.#children.splice(childAt, 0, item);
-    this.#indexTopLevelKeys();
-    // The constructor attached the itemView to the end of the element, so it is
-    // moved to where it now belongs in the tree.
-    this.element.insertBefore(item.itemView, before.itemView);
+
+    if (item.parent === this) {
+      const childAt = before === undefined ? -1 : this.#children.indexOf(before);
+      this.#children.splice(childAt < 0 ? this.#children.length : childAt, 0, item);
+      this.#indexTopLevelKeys();
+      // The constructor attached the itemView to the end of the element, so it is
+      // moved to where it now belongs in the tree.
+      if (childAt < 0) this.element.append(item.itemView);
+      else this.element.insertBefore(item.itemView, before.itemView);
+    } else if (item.parent instanceof Item) {
+      // A nested Item belongs to its own Group's child list; `before` says only
+      // where the subtree goes in the flat order, so the Group owns the shape and
+      // this owns the numbering.
+      item.parent.insertChild(item, item.parent.length);
+    } else {
+      throw new Error('insertBefore: the Item has no parent in this tree');
+    }
+
     return this.#indexSubtree(item, flatAt);
+  }
+
+  /**
+   * Registers an already-adopted subtree in the flat order at `at` (appended when
+   * omitted) and numbers it. The tree change itself belongs to whoever changed
+   * it (`add`, `insertBefore`, `Item#insertChild`); this is the flat-order half,
+   * for a caller that placed the subtree itself.
+   * @param {Item} item root of the subtree
+   * @param {number} [at]
+   * @returns {Item[]} the Items added, in the order they now hold
+   */
+  registerSubtree(item, at) {
+    return this.#indexSubtree(item, at);
+  }
+
+  /**
+   * Removes an Item and everything under it from the tree and from the flat
+   * order, renumbering what follows (REQ-7-14). The Item is left detached: its
+   * view is gone, its parent is `null`, and it is not reusable — an application
+   * that wants it back builds a new Item from its spec.
+   * @param {Item} item
+   * @returns {Item} the removed Item
+   */
+  remove(item) {
+    const parent = item.parent;
+    if (parent === this) {
+      const index = this.#children.indexOf(item);
+      if (index < 0) {
+        throw new Error('remove: the Item is not a top-level Item of this container');
+      }
+      this.#children.splice(index, 1);
+      this.element.removeChild(item.itemView);
+      this.#indexTopLevelKeys();
+    } else if (parent instanceof Item) {
+      parent.removeChild(item);
+    } else {
+      throw new Error('remove: the Item is not part of this tree');
+    }
+
+    this.#forgetSubtree(item);
+    item.parent = null;
+    item.owner = null;
+    return item;
+  }
+
+  /**
+   * Drops a removed subtree from the flat order and renumbers the Items after it.
+   * @private
+   * @param {Item} item root of the removed subtree
+   */
+  #forgetSubtree(item) {
+    const at = this.#all.indexOf(item);
+    if (at < 0) return;
+    this.#all.splice(at, item.subtreeSize);
+    for (let index = at; index < this.#all.length; index += 1) {
+      this.#all[index].definitionIndex = index;
+    }
   }
 
   /** @private Rebinds the numeric keys after the child list is reordered. */
   #indexTopLevelKeys() {
     this.#children.forEach((child, index) => {
+      child.childIndex = index;
       Object.defineProperty(this, index, {
         get: () => this.#children[index],
         configurable: true,
@@ -407,6 +502,14 @@ export class Item {
     warnOnSpec(spec, this.value, this.selectable);
 
     this.definitionIndex = definitionIndex;
+    /**
+     * This Item's place among the children of its `parent`. Maintained by
+     * whoever owns the child list (`#adopt` for a build, the container for an
+     * insertion), and what lets the sibling walks start from a number instead of
+     * copying the whole sibling array to find themselves in it.
+     * @type {number}
+     */
+    this.childIndex = 0;
     this.isGroup = false;
     // Before the flag below, which walks the chain of parents to report itself.
     this.parent = parent;
@@ -535,13 +638,127 @@ export class Item {
     this.#visibleSelectedCount = this.isGroup
       ? children.reduce((sum, child) => sum + child.visibleSelectedCount, 0)
       : 0;
-    children.forEach((child, index) => {
+    this.#indexChildren();
+  }
+
+  /**
+   * Renumbers the numeric keys and the `childIndex` of the child list, after the
+   * list was adopted or changed. One place for both, so a numeric key and the
+   * sibling walk can never disagree about where an Item sits.
+   * @private
+   */
+  #indexChildren() {
+    this.#children.forEach((child, index) => {
+      child.childIndex = index;
       Object.defineProperty(this, index, {
         get: () => this.#children[index],
         configurable: true,
         enumerable: true,
       });
     });
+  }
+
+  /**
+   * Adopts `item` as a child at `at`, for a tree that grows after the build
+   * (REQ-7-14). Appended when `at` is omitted.
+   *
+   * Only a Group can take a child: a Leaf that started holding Items would have
+   * to change what it is (its value, its Chip, its tick), which is a different
+   * operation from adding an Item under a container.
+   * @param {Item} item the already-built Item to adopt
+   * @param {number} [at] place among the children; appended when omitted
+   * @returns {Item} the inserted Item
+   */
+  insertChild(item, at) {
+    if (!this.isGroup) {
+      throw new Error('insertChild: only a Group Item can take children');
+    }
+    const index = at === undefined ? this.#children.length : at;
+    this.#children.splice(index, 0, item);
+    item.parent = this;
+    this.#indexChildren();
+
+    const next = this.#children[index + 1];
+    if (next) {
+      this.element.insertBefore(item.itemView, next.itemView);
+    } else {
+      this.element.append(item.itemView);
+    }
+
+    this.#absorb(item);
+    return item;
+  }
+
+  /**
+   * Detaches `item` from this Group's children. The Group stays a Group even
+   * when left holding nothing: an empty container is a shape the rest of the
+   * component reads consistently, while a Group turning back into a Leaf would
+   * change what the Item means.
+   * @param {Item} item
+   * @returns {Item} the removed Item
+   */
+  removeChild(item) {
+    const index = this.#children.indexOf(item);
+    if (index < 0) {
+      throw new Error('removeChild: the Item is not a child of this Group');
+    }
+    this.#children.splice(index, 1);
+    this.element.removeChild(item.itemView);
+    this.#indexChildren();
+    this.#release(item);
+    return item;
+  }
+
+  /**
+   * Adds an inserted subtree's shape to the counters up the chain.
+   *
+   * Only the two shape counts: the selection counts of the new Leaves were
+   * already reported up this same chain by their `selected` setters while the
+   * subtree was built, so adding them here would count them twice. Removal is the
+   * mirror and subtracts all four, because nothing runs the setters for a subtree
+   * that is simply detached.
+   * @private
+   * @param {Item} item
+   */
+  #absorb(item) {
+    for (let group = this; group; group = group.parentItem) {
+      group.#selectableCount += item.selectableCount;
+      group.#visibleSelectableCount += item.visibleSelectableCount;
+    }
+  }
+
+  /**
+   * Removes a detached subtree's counts from the chain of parents.
+   * @private
+   * @param {Item} item
+   */
+  #release(item) {
+    const selectable = item.selectableCount;
+    const selected = item.selectedCount;
+    const visible = item.visibleSelectableCount;
+    const visibleSelected = item.visibleSelectedCount;
+    for (let group = this; group; group = group.parentItem) {
+      group.#selectableCount -= selectable;
+      group.#selectedCount -= selected;
+      group.#visibleSelectableCount -= visible;
+      group.#visibleSelectedCount -= visibleSelected;
+      group.#selected = group.#selectedCount > 0;
+    }
+  }
+
+  /**
+   * Number of Items in this subtree, this one included. Walks without building
+   * the list `flatten()` returns; only a runtime insertion needs it.
+   * @returns {number}
+   */
+  get subtreeSize() {
+    let size = 0;
+    const walk = (node) => {
+      size += 1;
+      for (const child of node) walk(child);
+    };
+    walk(this);
+    return size;
   }
 
   /**
@@ -578,15 +795,11 @@ export class Item {
   set visible(value) {
     const after = Boolean(value);
     if (after === this.#visible) {
-      if (this.itemView) {
-        this.itemView.classList.toggle('cm-item--hidden', !after);
-      }
+      this.#applyHidden(!after);
       return;
     }
     this.#visible = after;
-    if (this.itemView) {
-      this.itemView.classList.toggle('cm-item--hidden', !after);
-    }
+    this.#applyHidden(!after);
     // A Group is a container: its own visibility says nothing about what it
     // holds, and its descendants keep the flags they were given. A Leaf that
     // cannot be selected is out of a toggle's reach, so it is out of these
@@ -609,6 +822,32 @@ export class Item {
 
   /** @private backing field for the visible property */
   #visible = true;
+
+  /** @private bits of the view state `syncView` last applied; `null` until the first sync */
+  #appliedView = null;
+
+  /**
+   * Applies the hidden class, writing the DOM only when the class is not already
+   * what it should be, and keeping the applied-view bits in step with the write.
+   *
+   * The setter and `syncView` are the two places that answer this part of the
+   * view, and a query pass touches the flag for every Item. Going through one
+   * guarded writer is what keeps a pass that flips a few Items from writing the
+   * same class for all of them twice (the setter, then the render).
+   * @private
+   * @param {boolean} hidden whether `cm-item--hidden` should be on
+   */
+  #applyHidden(hidden) {
+    const li = this.itemView;
+    if (!li) return;
+    if (li.classList.contains('cm-item--hidden') === hidden) return;
+    li.classList.toggle('cm-item--hidden', hidden);
+    if (this.#appliedView !== null) {
+      this.#appliedView = hidden
+        ? this.#appliedView | VIEW_HIDDEN
+        : this.#appliedView & ~VIEW_HIDDEN;
+    }
+  }
 
   /**
    * "Current" marker, moved across Chips/Items by the SelectionBox navigation
@@ -658,16 +897,12 @@ export class Item {
 
   /** The immediately following sibling Item, or null when this is the last. */
   get nextSibling() {
-    const siblings = [...this.parent];
-    const index = siblings.indexOf(this);
-    return index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : null;
+    return this.parent[this.childIndex + 1] ?? null;
   }
 
   /** The immediately preceding sibling Item, or null when this is the first. */
   get previousSibling() {
-    const siblings = [...this.parent];
-    const index = siblings.indexOf(this);
-    return index > 0 ? siblings[index - 1] : null;
+    return this.childIndex > 0 ? this.parent[this.childIndex - 1] ?? null : null;
   }
 
   /** The first Item in the same sibling set as this Item. */
@@ -677,8 +912,7 @@ export class Item {
 
   /** The last Item in the same sibling set as this Item. */
   get lastSibling() {
-    const siblings = [...this.parent];
-    return siblings[siblings.length - 1];
+    return this.parent[this.parent.length - 1];
   }
 
   /**
@@ -734,7 +968,12 @@ export class Item {
    * @returns {Item[]}
    */
   get navigableSiblings() {
-    return [...this.parent].filter((item) => item.navigable);
+    const list = [];
+    for (let index = 0; index < this.parent.length; index += 1) {
+      const item = this.parent[index];
+      if (item.navigable) list.push(item);
+    }
+    return list;
   }
 
   /**
@@ -757,10 +996,9 @@ export class Item {
    * @returns {Item|null}
    */
   #nextSibling() {
-    const siblings = [...this.parent];
-    const index = siblings.indexOf(this);
-    for (let i = index + 1; i >= 0 && i < siblings.length; i += 1) {
-      if (siblings[i].navigable) return siblings[i];
+    const parent = this.parent;
+    for (let index = this.childIndex + 1; index < parent.length; index += 1) {
+      if (parent[index].navigable) return parent[index];
     }
     return null;
   }
@@ -773,10 +1011,9 @@ export class Item {
    * @returns {Item|null}
    */
   #previousSibling() {
-    const siblings = [...this.parent];
-    const index = siblings.indexOf(this);
-    for (let i = index - 1; i >= 0; i -= 1) {
-      if (siblings[i].navigable) return siblings[i];
+    const parent = this.parent;
+    for (let index = this.childIndex - 1; index >= 0; index -= 1) {
+      if (parent[index].navigable) return parent[index];
     }
     return null;
   }
@@ -1159,6 +1396,10 @@ export class Item {
     row.append(tick, label);
     li.append(row);
 
+    // Layout is fixed per Item at construction, so the level's flow is applied
+    // once here rather than re-decided on every render.
+    this.element.classList.toggle('cm-item__children--row', this.childrenConfig.flow === 'row');
+
     if (this.isGroup) {
       li.append(this.element);
     }
@@ -1226,24 +1467,38 @@ export class Item {
    * created DOM parts (`itemView`, `chipView`). Called after `#createDOM()`.
    */
   syncView() {
-    this.element.classList.toggle('cm-item__children--row', this.childrenConfig.flow === 'row');
     const li = this.itemView;
     if (!li) return;
 
-    li.classList.toggle('cm-item--hidden', !this.visible);
-    if (!this.isGroup) {
-      li.classList.toggle('cm-item--selected', this.selected);
+    const hidden = !this.visible;
+    const state = this.isGroup ? this.selectionState : (this.selected ? 'all' : 'none');
+    const selected = this.isGroup ? state === 'all' : this.selected;
+    const partial = this.isGroup && state === 'partial';
+    const ticked = state === 'all' || state === 'partial';
+
+    let next = 0;
+    if (hidden) next |= VIEW_HIDDEN;
+    if (selected) next |= VIEW_SELECTED;
+    if (partial) next |= VIEW_PARTIAL;
+    if (ticked) next |= VIEW_TICKED;
+
+    // A render walks every Item, but a query or a single toggle moves a few. The
+    // applied bits are what make the walk cheap for the Items that did not move:
+    // they are read, found equal and left alone, instead of writing the same
+    // classes back onto the DOM. `null` forces the first pass to apply them all.
+    const previous = this.#appliedView;
+    if (previous === next) return;
+    const changed = (bit) => previous === null || (previous & bit) !== (next & bit);
+
+    if (changed(VIEW_HIDDEN)) this.#applyHidden(hidden);
+    if (changed(VIEW_SELECTED)) li.classList.toggle('cm-item--selected', selected);
+    if (changed(VIEW_PARTIAL)) li.classList.toggle('cm-item--partial', partial);
+    if (changed(VIEW_TICKED) && this.tickEl) {
+      this.tickEl.classList.toggle('cm-item__tick--partial', partial);
+      this.tickEl.textContent = ticked ? '\u2713' : '';
     }
 
-    const state = this.isGroup ? this.selectionState : (this.selected ? 'all' : 'none');
-    if (this.tickEl) {
-      this.tickEl.classList.toggle('cm-item__tick--partial', state === 'partial');
-      this.tickEl.textContent = state === 'all' || state === 'partial' ? '\u2713' : '';
-    }
-    if (this.isGroup) {
-      li.classList.toggle('cm-item--selected', state === 'all');
-      li.classList.toggle('cm-item--partial', state === 'partial');
-    }
+    this.#appliedView = next;
   }
 }
 
@@ -1284,7 +1539,12 @@ export class Filter {
   }
 
   set displaySelected(value) {
-    this.#displaySelected = Boolean(value);
+    const next = Boolean(value);
+    // Assigning what is already true is not a re-filter request: Filter mode's
+    // entry hook writes `false` on every entry, and re-applying the query there
+    // would re-render the whole list on every return to Filter mode for nothing.
+    if (next === this.#displaySelected) return;
+    this.#displaySelected = next;
     this.refilter();
   }
 
@@ -1351,6 +1611,15 @@ export class Filter {
   #applyQuery(textValue) {
     this.control.dropDown.filter(textValue);
     this.control.dropDown.rehomeCurrent();
+  }
+
+  /**
+   * Cancels a query still waiting on the debounce, so a torn-down control cannot
+   * filter after it is gone. Called by `MSelect#destroy`.
+   */
+  cancelPending() {
+    clearTimeout(this.#debounceTimer);
+    this.#debounceTimer = null;
   }
 
   /** Debounced event handler of the input element. */
@@ -1495,7 +1764,24 @@ class SelectionBox {
    */
   get withinChipLimit() {
     const max = this.control.options.maxVisibleChips;
-    return max == null || this.control.selectedItems.length <= max;
+    // The box's own membership is the selected count: an Item joins it as it is
+    // selected and leaves it as it is unselected. Reading `selectedItems` here
+    // instead walked and re-filtered the whole tree on every chip added or
+    // removed, which is a per-chip cost on a list of thousands.
+    return max == null || this.items.length <= max;
+  }
+
+  /**
+   * Recomputes the collapse after something other than a selection change moved
+   * it - a mode transition is the one such thing, since `holdsCollapse` is
+   * derived from the active mode (REQ-3.11-22). Re-renders the Chips only when
+   * the answer actually moved, so a mode switch that leaves the box as it was
+   * costs a comparison rather than a chip pass.
+   */
+  refreshCollapse() {
+    const before = this.#collapsed;
+    this.#updateCollapsedState();
+    if (before !== this.#collapsed) this.render();
   }
 
   /** Recomputes the displayed collapse state from the selection count. */
@@ -1507,9 +1793,7 @@ class SelectionBox {
     }
     this.#collapsed =
       !this.withinChipLimit ||
-      (this.#collapsed &&
-        this.control.selectedItems.length > 0 &&
-        this.control.holdsCollapse);
+      (this.#collapsed && this.items.length > 0 && this.control.holdsCollapse);
   }
 
   /**
@@ -1794,11 +2078,25 @@ class DropDown {
   }
 
   /**
-   * Re-homes the Current marker after a text query has re-filtered the list: an
-   * Item the query just hid cannot stay marked, so the marker moves to the first
-   * navigable Item, and a query that left nothing to mark drops it. A marker
-   * standing on an Item the query kept visible is left alone, so typing on after
-   * navigating does not drag the marker back to the top on every keystroke.
+   * Re-homes the Current marker after a text query has re-filtered the list.
+   *
+   * Every query change moves the marker to the first selectable leaf of the new
+   * list, and a query that left nothing visible drops it. The marker is not kept
+   * where it stood even when that Item is still visible: the list under the
+   * query is a different list from the one the marker was placed on, and after
+   * a replacement ("le" typed over with "nd") an Item that happens to survive
+   * both queries — a Group kept visible by a child, or a Label matching both —
+   * would otherwise hold the marker while the user is looking at a list that
+   * starts somewhere else.
+   *
+   * The target is a leaf and not the first row, because a Group row a query
+   * leaves standing is usually kept only by a descendant that matched: in the
+   * demo tree "nd" leaves Cities visible through London, and the Item the user
+   * is looking at when they then press Enter is London, not the container. A
+   * Group the query matched by its own Label can still show no leaf at all (the
+   * `groupItems.filterScope: 'matching'` case); there the marker falls back to
+   * the first navigable Item so it does not vanish from a list that still has a
+   * row to act on.
    *
    * This answers for the text query alone. The selected-Items restriction is a
    * re-filter as well, but it has a rule of its own for the marker — the one
@@ -1806,9 +2104,18 @@ class DropDown {
    * here, and a selection change cannot quietly move the marker this way.
    */
   rehomeCurrent() {
-    const current = this.#currentItem;
-    if (current && current.visible) return;
-    this.setCurrent(this.control.navigableTopLevel[0] || null);
+    this.setCurrent(this.#firstVisibleLeaf() || this.control.navigableTopLevel[0] || null);
+  }
+
+  /**
+   * The first selectable leaf the current list shows, in tree order.
+   * @returns {Item|null}
+   */
+  #firstVisibleLeaf() {
+    for (const item of this.control.items.flatten()) {
+      if (!item.isGroup && item.isSelectable && item.visible) return item;
+    }
+    return null;
   }
 
   /**
@@ -1894,6 +2201,9 @@ class DropDown {
         ? this.control.options.filterFn
         : null;
     const scope = this.control.options.groupItems?.filterScope || 'all';
+    // Folded once rather than once per Item: the default match is the only
+    // consumer, and a pass reads every Item in the tree.
+    const folded = query.toLowerCase();
 
     // Whether the Item matches in its own right, under whichever matcher is at
     // play.
@@ -1901,7 +2211,7 @@ class DropDown {
       if (restriction) return Boolean(restriction(item, query));
       if (query === '') return true;
       if (custom) return Boolean(custom(item, query));
-      return item.label.toLowerCase().includes(query.toLowerCase());
+      return item.label.toLowerCase().includes(folded);
     };
 
     const apply = (items) => {
@@ -1934,7 +2244,10 @@ class DropDown {
     ).length;
     this.showSelectAllButton = query !== '' && visibleLeaves > 1;
 
-    this.control.render();
+    // Only the list changed: the Chips and the form mirror describe the
+    // selection, which a query does not touch. Re-rendering them here used to
+    // rebuild every chip and hidden input once per keystroke.
+    this.render();
   }
 
   render() {
@@ -2168,6 +2481,10 @@ export class MSelect {
 
     this.#modes = new Modes(MODES.FILTER, (from, to) => {
       this.#markMode(to);
+      // The collapse is held by some modes and released by others, so the box
+      // is judged again here; a selection change is not the only thing that can
+      // move it.
+      this.selectionBox?.refreshCollapse();
       this.emit('cm-mode-change', { from, to });
     });
 
@@ -2198,10 +2515,22 @@ export class MSelect {
     document.addEventListener('mousedown', this.#docMousedown);
     document.addEventListener('keydown', this.#docKeydown);
 
-    if (!this.options.delayedLoad) this.setItems(config.items);
+    if (!this.options.delayedLoad) {
+      // A spec the control cannot take (a duplicate value) throws while the
+      // control is already on the page and listening to the document. Tearing it
+      // down on the way out keeps a failed construction from leaving a mounted
+      // element and two document listeners behind for good.
+      try {
+        this.setItems(config.items);
+      } catch (error) {
+        this.destroy();
+        throw error;
+      }
+    }
 
+    // No render here: `setItems` has already rendered the selection, and the
+    // Items applied their own views as they were built.
     this.logger.info('component rendered');
-    this.render();
   }
 
   /** @private internal input-mode state machine, wired in the constructor, exposed only via MSELECT_INTERNALS */
@@ -2408,6 +2737,10 @@ export class MSelect {
       // taking its place, so the marker is put back on it.
       if (this.selectionBox.filter.displaySelected) {
         const current = this.dropDown.currentItem;
+        // Dropping the restriction belongs to Filter mode's entry hook, but the
+        // hook does not run when Filter is already active - and an emptied
+        // selection drops it either way (REQ-3.11-23).
+        this.selectionBox.filter.displaySelected = false;
         this.#activateFilter();
         if (current) this.dropDown.setCurrent(current);
       }
@@ -2587,7 +2920,6 @@ export class MSelect {
 
     this.dropDown.clearCurrent();
     this.selectionBox.clear();
-    this.selectionBox.render();
 
     const selected = this.selectedItems;
     if (
@@ -2611,8 +2943,7 @@ export class MSelect {
         this.selectionBox.add(item);
       }
     });
-    this.selectionBox.render();
-    this.#syncFormValues();
+    this.renderSelection();
     this.#normalizeMode();
 
     if (this.options.delayedLoad) {
@@ -2620,6 +2951,156 @@ export class MSelect {
     }
     this.#emitSelectionChange();
     return this;
+  }
+
+  /* ---- tree changes after instantiation (REQ-7-14) ---- */
+
+  /**
+   * Adds an Item — with any subtree its spec carries — to the instantiated tree,
+   * at a chosen place, and returns it (REQ-7-14). The new Items join the flat
+   * order and the `definitionIndex` numbering, obey the active query or
+   * selected-Items restriction, and any `selected: true` in the spec arrives as
+   * Chips in one settled change.
+   *
+   * The place is `{ before, parent }`, both naming an Item by value:
+   * - `parent` puts the new Item under that Group Item. Omitted, it is top-level.
+   * - `before` puts it in front of that Item, in tree order; omitted, it follows
+   *   the Items already in its new home.
+   * A `before` that is not a child of `parent` would put the tree in a shape the
+   * caller did not name, so it is refused rather than guessed at.
+   * @param {object} spec the Item spec, as `setItems` takes one
+   * @param {{before?: unknown, parent?: unknown}} [place]
+   * @returns {Item} the added Item
+   */
+  addItem(spec, { before, parent } = {}) {
+    if (!this.#itemsLoaded) {
+      throw new Error('addItem() requires setItems() to have populated the tree first');
+    }
+
+    const parentItem = parent === undefined ? this.items : this.#groupByValue(parent);
+    const beforeItem = before === undefined ? null : this.#itemByValue(before);
+    if (before !== undefined && !beforeItem) {
+      throw new Error(`addItem: no Item has the value "${before}"`);
+    }
+    if (beforeItem && beforeItem.parent !== parentItem) {
+      throw new Error(`addItem: "${before}" is not a child of the Item it is being placed in`);
+    }
+    this.#assertValuesFree(spec);
+
+    const item = new Item(spec, this.options, 0, parentItem);
+    const added = [item, ...item.flatten()];
+    for (const newItem of added) newItem.owner = this;
+
+    if (parentItem === this.items) {
+      this.items.insertBefore(item, beforeItem ?? undefined);
+    } else {
+      const at = beforeItem ? beforeItem.childIndex : parentItem.length;
+      const flatAt = beforeItem
+        ? this.allItems.indexOf(beforeItem)
+        : this.allItems.indexOf(parentItem) + parentItem.subtreeSize;
+      parentItem.insertChild(item, at);
+      this.items.registerSubtree(item, flatAt);
+    }
+
+    // A spec's own `selected: true` is a claim about the new subtree's state, not
+    // an interaction: the leaves are already selected, so the box only has to be
+    // told which Chips they own.
+    this.#inBatch(() => {
+      for (const newItem of added) {
+        if (!newItem.isGroup && newItem.selected) this.selectionBox.add(newItem);
+      }
+    });
+
+    this.#refreshFiltering();
+    this.renderSelection();
+    this.#normalizeMode();
+    this.#emitSelectionChange();
+    return item;
+  }
+
+  /**
+   * Removes the Item carrying `value`, with everything under it (REQ-7-14).
+   * Leaves it held were selected, so removing it takes their Chips with it and
+   * reports the change; a Current marker standing inside the removed subtree is
+   * dropped rather than left pointing at an Item that is no longer there.
+   * @param {unknown} value
+   * @returns {boolean} whether an Item was removed
+   */
+  removeItem(value) {
+    const item = this.#itemByValue(value);
+    if (!item) return false;
+
+    const removed = new Set([item, ...item.flatten()]);
+    // Unselected first, while the leaves still have a box to leave: a Chip belongs
+    // to a selected Item that is still in the tree.
+    this.#inBatch(() => {
+      for (const node of removed) {
+        if (!node.isGroup && node.selected) {
+          node.selected = false;
+          this.selectionBox.remove(node);
+        }
+      }
+    });
+
+    const current = this.dropDown.currentItem;
+    if (current && removed.has(current)) this.dropDown.clearCurrent();
+
+    this.items.remove(item);
+    this.#refreshFiltering();
+    this.renderSelection();
+    this.#normalizeMode();
+    this.#emitSelectionChange();
+    return true;
+  }
+
+  /** @private The Item carrying `value`, or null. */
+  #itemByValue(value) {
+    return this.allItems.find((item) => item.value === value) ?? null;
+  }
+
+  /** @private The Group carrying `value`; throws when absent or a Leaf. */
+  #groupByValue(value) {
+    const item = this.#itemByValue(value);
+    if (!item) throw new Error(`addItem: no Item has the value "${value}"`);
+    if (!item.isGroup) {
+      throw new Error(`addItem: "${value}" is not a Group Item, so it cannot take children`);
+    }
+    return item;
+  }
+
+  /**
+   * @private Refuses a spec whose value is already taken, before anything is
+   * built. `#assertUniqueValues` checks a freshly built tree; this checks one
+   * subtree against the tree already there, so a rejected addition leaves no
+   * half-attached Item behind.
+   * @param {object} spec
+   */
+  #assertValuesFree(spec) {
+    const taken = new Set();
+    for (const item of this.allItems) {
+      if (item.value !== undefined) taken.add(item.value);
+    }
+    const check = (node) => {
+      if (!node || typeof node !== 'object') return;
+      const value = normalizeValue(node.value);
+      if (value !== undefined) {
+        if (taken.has(value)) throw new Error(`Duplicate item value: "${value}"`);
+        taken.add(value);
+      }
+      (node.items || []).forEach(check);
+    };
+    check(spec);
+  }
+
+  /**
+   * @private Re-applies whatever the list is currently filtered by, after the
+   * tree itself changed: a query must judge the Items that just arrived, and a
+   * selected-Items restriction must take in a newly selected one. With no query
+   * and no restriction every Item is visible, which is what a new Item already is.
+   */
+  #refreshFiltering() {
+    const filter = this.selectionBox.filter;
+    if (filter.displaySelected || filter.query !== '') filter.refilter();
   }
 
   /**
@@ -2787,6 +3268,14 @@ export class MSelect {
   /** @private Hidden-input container for form submission; created on first need. */
   #formEl = null;
 
+  /**
+   * @private The hidden inputs, aligned index-for-index with `selectionBox.items`.
+   * Kept so a selection change updates the inputs that moved instead of throwing
+   * the whole mirror away and building it again: a settle used to wipe and
+   * recreate one `<input>` per selected Item, twice.
+   */
+  #formInputs = [];
+
   /** @private Values already warned about the comma delimiter; warn once each. */
   #commaWarned = new Set();
 
@@ -2811,8 +3300,11 @@ export class MSelect {
       this.#formEl.className = 'cm-form';
       this.el.append(this.#formEl);
     }
-    this.#formEl.innerHTML = '';
-    for (const item of this.selectionBox.items) {
+    const items = this.selectionBox.items;
+    const inputs = this.#formInputs;
+
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
       const value = String(item.value);
       if (value.includes(',') && !this.#commaWarned.has(value)) {
         this.#commaWarned.add(value);
@@ -2822,11 +3314,28 @@ export class MSelect {
             'so the value cannot be told apart after the join.'
         );
       }
-      const input = document.createElement('input');
-      input.type = 'hidden';
-      input.name = name;
-      input.value = value;
-      this.#formEl.append(input);
+
+      // Reuse the input at this position where there is one. Reusing rather than
+      // recreating keeps the form mirror diff-sized: a settle that moves one Item
+      // writes one value, instead of detaching and re-adding every input.
+      let input = inputs[index];
+      if (!input) {
+        input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        inputs[index] = input;
+        this.#formEl.append(input);
+        continue;
+      }
+      if (input.name !== name) input.name = name;
+      if (input.value !== value) input.value = value;
+    }
+
+    // The tail beyond the selection is the only part that is removed, so the
+    // inputs above stay attached across a settle.
+    while (inputs.length > items.length) {
+      inputs.pop().remove();
     }
   }
 
@@ -2864,7 +3373,8 @@ export class MSelect {
    */
   setChipPlaceOrder(order) {
     this.options.chipPlaceOrder = order;
-    this.render();
+    // Only the Chips are ordered by this; the list and the form mirror are not.
+    this.selectionBox.render();
   }
 
   /**
@@ -2913,7 +3423,7 @@ export class MSelect {
     if (this.selectionBox.filter.displaySelected) {
       this.selectionBox.filter.refilter();
     } else {
-      this.render();
+      this.renderList();
     }
   }
 
@@ -2936,8 +3446,11 @@ export class MSelect {
    * visible again, and keeping the marker on it is the documented behaviour.
    */
   #settleAfterSelectionChange() {
-    this.#syncFormValues();
+    // The list first, then the box: the Chips and the form mirror describe the
+    // selection and are rendered once here, where the settle used to render the
+    // whole control and sync the form twice over.
     this.#syncVisibleList();
+    this.renderSelection();
     this.#normalizeMode();
 
     if (
@@ -3102,10 +3615,10 @@ export class MSelect {
     this.logger.info('toggle all');
     this.requestItems();
     this.#inBatch(() => this.dropDown.items.toggle());
-    if (this.selectionBox?.filter) {
-      this.selectionBox.filter.query = '';
-    }
-    this.render();
+    // Clearing the query re-filters, which renders the list; only the Chips and
+    // the form mirror are left for this to bring up to date.
+    this.selectionBox.filter.query = '';
+    this.renderSelection();
     this.#emitSelectionChange();
   }
 
@@ -3150,10 +3663,28 @@ export class MSelect {
     this.#switchMode(MODES.DROPDOWN);
   }
 
-  render() {
+  /**
+   * Renders only the DropDown list: what a query, a visibility change or a
+   * selection class in the list affects. The Chips and the form mirror are left
+   * alone, which is what keeps a keystroke from rebuilding them.
+   */
+  renderList() {
     this.dropDown.render();
+  }
+
+  /**
+   * Renders the Selection Box Chips and the form mirror: what a selection change
+   * affects. Pair with `renderList()` for a change that moves both.
+   */
+  renderSelection() {
     this.selectionBox.render();
     this.#syncFormValues();
+  }
+
+  /** Renders the whole control: the list, the Chips and the form mirror. */
+  render() {
+    this.renderList();
+    this.renderSelection();
   }
 
   /**
@@ -3174,6 +3705,9 @@ export class MSelect {
   destroy() {
     if (this.#destroyed) return;
     this.#destroyed = true;
+    // A debounced query still waiting would otherwise fire at a control that is
+    // no longer on the page - and keep it reachable until it did.
+    this.selectionBox.filter.cancelPending();
     document.removeEventListener('mousedown', this.#docMousedown);
     document.removeEventListener('keydown', this.#docKeydown);
     this.el.remove();

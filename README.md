@@ -94,6 +94,9 @@ Value-based public API (no internal objects exposed).
 | `get mode()` | Current input mode (`'filter' \| 'dropdown' \| 'chip' \| 'collapsed'`) |
 | `get isEmpty()` | True if no items loaded (useful with `delayedLoad`) |
 | `get filterFn()` / `set filterFn(fn)` | Custom query matcher; assign to replace, `null` to restore the built-in label match |
+| `get query()` / `set query(text)` | The Filter's text; assigning re-filters the list without opening it |
+| `addItem(spec, place?)` | Add an item at runtime; `place` = `{ before?, parent? }` naming values |
+| `removeItem(value)` | Remove an item with its subtree and its chips; returns whether it was found |
 | `get el()` | Root element of the control |
 | `open()` / `close()` | Toggle dropdown visibility |
 | `select(value)` / `unselect(value)` / `toggle(value)` | Modify selection |
@@ -110,6 +113,7 @@ Full component API with access to internals.
 | `constructor(hostElement, config)` | Create and mount control |
 | `get selectedValues()` / `set selectedValues(values)` | Get/set selection by values (settles in one pass) |
 | `get filterFn()` / `set filterFn(fn)` | Get/replace the query matcher at runtime |
+| `addItem(spec, place?)` / `removeItem(value)` | Change the tree after instantiation, returning the added Item / whether one was removed |
 | `get selectedItems()` | Currently selected Item objects |
 | `get mode` / `set mode` | Get/set input mode |
 | `setItems(specs, selectedValues?)` | One-time tree instantiation (throws if called twice) |
@@ -171,6 +175,22 @@ facade.filterFn = null;
 }
 ```
 
+### Changing the tree at runtime
+
+`setItems` instantiates the tree once; after that, `addItem`/`removeItem` adjust it.
+The place is given by value, so no internal object crosses the API.
+
+```js
+facade.addItem({ value: 'paris', label: 'Paris' }, { parent: 'cities' });
+facade.addItem({ value: 'lyon', label: 'Lyon' }, { parent: 'cities', before: 'oslo' });
+facade.removeItem('oslo'); // the subtree and its chips go with it
+```
+
+An added item obeys the query and the selected-items restriction that are active
+when it arrives; a removed item takes its chips with it and the change is
+reported once. A duplicate value, or a place naming no item, a non-group parent,
+or another parent's child, throws before anything is attached.
+
 Notes:
 - Groups don't own values/chips; selection comes from their children
 - Items without values cannot be selected
@@ -195,7 +215,7 @@ The control maintains a single tab stop (the Filter input). Navigation uses mode
 
 | Mode | Key Behaviors |
 |---|---|
-| **Filter** | Type to filter. `ArrowDown` opens dropdown and navigates. `ArrowLeft` on empty query enters Chip/Collapsed mode. `Backspace` at start removes rightmost chip. `Enter` toggles current item and clears filter. |
+| **Filter** | Type to filter; every query change moves the Current marker to the first selectable match (a group header is skipped, and a query matching nothing clears the marker). `ArrowDown` opens dropdown and navigates. `ArrowLeft` on empty query enters Chip/Collapsed mode. `Backspace` at start removes rightmost chip. `Enter` toggles current item and clears filter. `Escape` closes an open dropdown; pressed again with it closed, it clears the query. |
 | **Dropdown** | `ArrowUp/Down/Left/Right` navigate hierarchy (direction depends on level layout). `Home/End/PageUp/PageDown` move within level. `Space` toggles current item (stays open). `Enter` toggles and closes dropdown. `Escape` closes and returns to previous mode. |
 | **Chip** | `ArrowLeft/Right` navigate chips. `Delete`/`Backspace` remove chips. `ArrowDown` opens dropdown. `ArrowRight` at end returns to Filter. |
 | **Collapsed** | Navigate collapsed summary. `ArrowDown` opens restricted dropdown of selected items. `ArrowRight` returns to Filter. |
@@ -230,10 +250,13 @@ m-select/
 │   ├── modes.js              # Mode definitions and handlers
 │   ├── main.js               # Demo entry
 │   └── m-select.css
-├── test/
-│   ├── 01_m-select.test.js   # Core tests
-│   ├── 02-m-select-facade.test.js
-│   └── dom-stub.js
+├── test/                     # one file per area (see Testing)
+│   ├── 01_items-and-selection.test.js
+│   ├── 02_m-select-facade.test.js
+│   ├── 03_filtering-and-groups.test.js … 12_selection-form-and-events.test.js
+│   ├── 13_numbering-guard.test.js
+│   ├── teardown.js           # destroys controls a test leaves alive
+│   └── dom-stub.js           # minimal DOM stub
 ├── demo/
 │   ├── index.html
 │   └── favicon.svg
@@ -249,7 +272,19 @@ Tests use Vitest with Node environment and a custom DOM stub (`test/dom-stub.js`
 npx vitest run
 ```
 
-Current test suite: **495 tests passing** across 2 test files.
+Current test suite: **525 tests passing** across 13 test files.
+
+The suite is split by area: each file covers a numbered group of behaviours
+(`01_items-and-selection`, `03_filtering-and-groups`, `04_chips`, `05_modes`, …),
+and every `it` carries the project-wide hierarchical number
+(`<describe>.<area>.<test>`). `13_numbering-guard.test.js` enforces that
+convention — unique ids, correctly prefixed, files numbered without gaps — so a
+new test cannot quietly reuse a number.
+
+Every test file imports `test/teardown.js`, which destroys any control its test
+left alive and fails the test if a document listener would otherwise outlive it.
+Tests that build a `delayedLoad` control and never give it items destroy it
+themselves, since there is nothing for the registry to observe.
 
 ## Browser Support
 

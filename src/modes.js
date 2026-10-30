@@ -100,7 +100,14 @@ const startMarker = (control) => {
  *   unselects every selected Item instead. Anywhere else it is passed down to
  *   the input's default text editing.
  *
- * - Escape closes the DropDown.
+ * - Escape is a two-step cancel. With the Drop Down open the press closes it
+ *   and nothing else — a query the user wants to keep is kept, because they may
+ *   only want the list out of the way. With it already closed the press clears
+ *   the query (`''`), which re-filters the hidden list back to the unfiltered
+ *   one and re-homes the marker by the query rule (REQ-3.11-19); a query that
+ *   is already empty leaves the marker alone. The Drop Down is never opened by
+ *   the key, and the text is cleared through `Filter#query`, so the input's
+ *   value, the list and the marker cannot disagree.
  *
  * - The "Current" marker never survives a transition here: entering Filter
  *   mode clears it, so a return from DropDown/Chip/Collapsed (or a
@@ -157,7 +164,15 @@ export function filterMode(control) {
         control.unselectItem(chips[chips.length - 1]);
         return true;
       },
-      Escape: () => closeDropDown(control),
+      Escape: () => {
+        // The list's cancel comes first: while the Drop Down is open the press
+        // belongs to it, so the query survives for the next press.
+        if (!control.dropDown.open) {
+          const filter = control.selectionBox.filter;
+          if (filter.query !== '') filter.query = '';
+        }
+        return closeDropDown(control);
+      },
     },
   };
 }

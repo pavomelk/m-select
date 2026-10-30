@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import './teardown.js';
 import { MSelectFacade } from '../src/m-select-facade.js';
 import { specLog } from '../src/m-select.js';
 
@@ -341,6 +342,54 @@ describe('2. MSelectFacade', () => {
       // case-folded, so `startsWith('A')` is the application's own decision.
       expect(seen).toEqual(['A', 'A', 'A']);
       vi.useRealTimers();
+    });
+  });
+
+  describe('2.7 Query and tree updates', () => {
+    it('2.7.1 query reads and writes the Filter text, re-filtering the list', () => {
+      const { facade } = build();
+
+      expect(facade.query).toBe('');
+
+      facade.query = 'A';
+      expect(facade.query).toBe('A');
+
+      // Select All acts on what the query leaves visible, then clears it.
+      facade.selectAll();
+      expect(facade.values).toEqual(['a']);
+      expect(facade.query).toBe('');
+    });
+
+    it('2.7.2 addItem and removeItem work by value', () => {
+      const { facade } = build();
+
+      expect(facade.addItem({ value: 'd', label: 'D' })).toBe('d');
+      facade.select('d');
+      expect(facade.values).toEqual(['d']);
+
+      expect(facade.removeItem('d')).toBe(true);
+      expect(facade.values).toEqual([]);
+      expect(facade.removeItem('d')).toBe(false);
+    });
+
+    it('2.7.3 addItem takes its place by sibling value', () => {
+      const { facade } = build();
+
+      facade.addItem({ value: 'ab', label: 'AB' }, { before: 'b' });
+      facade.selectAll();
+
+      expect(facade.values).toEqual(['a', 'ab', 'b', 'c']);
+    });
+
+    it('2.7.4 a destroyed facade refuses query and tree writes', () => {
+      const { facade } = build();
+      facade.destroy();
+
+      expect(() => {
+        facade.query = 'x';
+      }).toThrow(/destroyed/);
+      expect(() => facade.addItem({ value: 'd', label: 'D' })).toThrow(/destroyed/);
+      expect(() => facade.removeItem('a')).toThrow(/destroyed/);
     });
   });
 });

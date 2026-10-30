@@ -78,7 +78,26 @@ export class MSelectFacade {
     return this.#control.filterFn;
   }
 
+  /**
+   * The Filter's text query. Reading returns what is typed; assigning re-filters
+   * the list without opening it, since a programmatic write is not a user edit
+   * (REQ-3.9-02).
+   * @type {string}
+   */
+  get query() {
+    return this.#control.selectionBox.filter.query;
+  }
+
   /* ---- writes ---- */
+
+  /**
+   * Sets the Filter's text query and re-filters the list by it.
+   * @param {string} text
+   */
+  set query(text) {
+    this.#assertAlive();
+    this.#control.selectionBox.filter.query = text;
+  }
 
   /**
    * Replaces the Filter's matching function and re-filters the list by the
@@ -89,6 +108,28 @@ export class MSelectFacade {
   set filterFn(fn) {
     this.#assertAlive();
     this.#control.filterFn = fn;
+  }
+
+  /**
+   * Adds an Item to the instantiated tree at a chosen place (REQ-7-14).
+   * @param {object} spec the Item spec, as `setItems` takes one
+   * @param {{before?: unknown, parent?: unknown}} [place] sibling/parent values
+   * @returns {unknown} the added Item's value, or `undefined` when it carries none
+   */
+  addItem(spec, place) {
+    this.#assertAlive();
+    return this.#control.addItem(spec, place).value;
+  }
+
+  /**
+   * Removes the Item carrying `value`, with everything under it (REQ-7-14). Its
+   * Chips go with it and the change is reported once.
+   * @param {unknown} value
+   * @returns {boolean} whether an Item was removed
+   */
+  removeItem(value) {
+    this.#assertAlive();
+    return this.#control.removeItem(value);
   }
 
   /**

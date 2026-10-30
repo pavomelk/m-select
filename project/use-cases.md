@@ -39,10 +39,12 @@ Clicking the Filter opens the Drop Down without marking anything, so a user who
 only wants to look has not also moved a highlight. Typing opens the Drop Down the
 moment the first character lands — changing the query is itself a wish to see the
 list — and narrows it to the matches, settling the Current marker against the list
-the query just produced: an Item the query still shows keeps the marker, an Item
-it has just hidden cannot hold it and the marker moves to the first one still
-standing, and a query that matches nothing clears the marker rather than pointing
-at something off-screen.
+the query just produced: the marker always lands on the first selectable match
+of the new list, so an Item the previous query happened to leave standing does
+not keep it, and a query that matches nothing clears the marker rather than
+pointing at something off-screen. The first selectable match is what the user is
+looking at when they press `Enter` — a Group row the query kept only because a
+child inside it matched is passed over, and the child is marked instead.
 
 ### Entering the list
 
@@ -70,6 +72,9 @@ Filter itself, before the user has entered the list: it toggles the Item the
 query left Current, closes the Drop Down and stays in the Filter, and the key
 never reaches the page, so a form around the control is not submitted by it.
 `Escape` closes the Drop Down without toggling anything and returns the same way.
+Pressed again with the list already closed, it clears the Filter instead, so a
+search is abandoned without selecting anything and nothing of it is left behind;
+the query never outlives the session that typed it.
 
 The mouse does the same work without the detour. Clicking an Item's row toggles
 it, marks it Current and leaves the list open; clicking the "x" on a Chip removes
