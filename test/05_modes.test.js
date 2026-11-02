@@ -230,6 +230,19 @@ describe('1. MSelect — Modes', () => {
 
       expect(control.dropDown.showSelectAllButton).toBe(false);
     });
+
+    it('1.12.17 the toolbar is hidden with the select all button and shown with it', () => {
+      const control = triple();
+      expect(control.dropDown.toolbarEl.style.display).toBe('none');
+
+      control.selectionBox.filter.query = 'r';
+
+      expect(control.dropDown.toolbarEl.style.display).not.toBe('none');
+
+      control.selectionBox.filter.query = '';
+
+      expect(control.dropDown.toolbarEl.style.display).toBe('none');
+    });
   });
 
   // requires: Filter.el input element, query/displaySelected semantics,
@@ -262,7 +275,7 @@ describe('1. MSelect — Modes', () => {
 
         expect(dropDownFilter).not.toHaveBeenCalled();
 
-        vi.advanceTimersByTime(299);
+        vi.advanceTimersByTime(149);
         expect(dropDownFilter).not.toHaveBeenCalled();
 
         vi.advanceTimersByTime(1);

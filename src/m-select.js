@@ -1510,7 +1510,7 @@ export class Filter {
    * @param {MSelect} control
    * @param {number} [debounceDelay] ms before the filter is applied
    */
-  constructor(control, debounceDelay = 300) {
+  constructor(control, debounceDelay = 150) {
     this.control = control;
     this.debounceDelay = debounceDelay;
     this.el = document.createElement('input');
@@ -2010,6 +2010,7 @@ class DropDown {
 
     this.toolbarEl.append(this.selectAllBtn);
     this.selectAllBtn.style.display = 'none';
+    this.toolbarEl.style.display = 'none';
 
     this.itemsEl = document.createElement('div');
     this.itemsEl.className = 'cm-items';
@@ -2023,8 +2024,9 @@ class DropDown {
   #showSelectAllBtn = false;
 
   /**
-   * Controls whether the "Select All" button is displayed. Reads return the
-   * current visibility state; assigning a boolean shows or hides the button.
+   * Controls whether the toolbar and its "Select All" button are displayed.
+   * Reads return the current visibility state; assigning a boolean shows or
+   * hides both, so the toolbar never leaves its padding and border behind.
    * @param {boolean} [value]
    * @returns {boolean}
    */
@@ -2034,7 +2036,9 @@ class DropDown {
 
   set showSelectAllButton(value) {
     this.#showSelectAllBtn = Boolean(value);
-    this.selectAllBtn.style.display = this.#showSelectAllBtn ? '' : 'none';
+    const display = this.#showSelectAllBtn ? '' : 'none';
+    this.selectAllBtn.style.display = display;
+    this.toolbarEl.style.display = display;
   }
 
   /** The currently marked Item, or null when none is defined. */
