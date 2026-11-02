@@ -448,6 +448,18 @@ describe('1. MSelect — Keyboard in the DropDown', () => {
       filter.click();
       expect(control.dropDown.open).toBe(true);
     });
+
+    it('1.34.5 clicking the empty part of the Selection Box toggles the DropDown like the Filter', () => {
+      const control = setup();
+      const box = control.selectionBox.el;
+
+      box.dispatchEvent({ type: 'click', target: box });
+      expect(control.dropDown.open).toBe(true);
+
+      box.dispatchEvent({ type: 'click', target: box });
+      expect(control.dropDown.open).toBe(false);
+      expect(control[MSELECT_INTERNALS].modes.mode).toBe('filter');
+    });
   });
 
   // requires: entering Filter mode clearing the "Current" marker, so a return

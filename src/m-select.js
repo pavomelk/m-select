@@ -2609,14 +2609,8 @@ export class MSelect {
       return;
     }
 
-    if (target === this.selectionBox.filter.el) {
-      this.#activateFilter();
-      this.dropDown.open = !this.dropDown.open;
-      return;
-    }
-
-    this.#switchMode(MODES.DROPDOWN);
-    this.dropDown.open = true;
+    this.#activateFilter();
+    this.dropDown.open = !this.dropDown.open;
   }
 
   /**
