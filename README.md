@@ -243,7 +243,7 @@ The control maintains a single tab stop (the Filter input). Navigation uses mode
 | **Chip** | `ArrowLeft/Right` navigate chips. `Delete`/`Backspace` remove chips. `ArrowDown` opens dropdown. `ArrowRight` at end returns to Filter. |
 | **Collapsed** | Navigate collapsed summary. `ArrowDown` opens restricted dropdown of selected items. `ArrowRight` returns to Filter. |
 
-Clicking the Filter toggles the dropdown. While the dropdown is open, `Tab` and `Shift+Tab` are consumed so focus stays in the control; close it with `Escape`, `Enter`, or by clicking the Filter again.
+Clicking the Selection Box outside a chip or button toggles the dropdown. While the dropdown is open, `Tab` and `Shift+Tab` are consumed so focus stays in the control; close it with `Escape`, `Enter`, or by clicking the Selection Box again.
 
 ## Styling & Theming
 
