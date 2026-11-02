@@ -353,7 +353,9 @@ export function dropdownMode(control) {
  * MSelect#normalizeMode). ArrowDown opens the DropDown, scrolling the Current
  * Item into view while staying in Chip mode; a repeated ArrowDown, with the
  * DropDown already open, moves on to DropDown mode and leaves that Current
- * Item in place, so the list continues from the Chip it came from.
+ * Item in place, so the list continues from the Chip it came from. `Escape` in
+ * that DropDown returns to Filter mode when the Current Item is not one of the
+ * selected Items, since chip navigation has no Chip to resume on.
  * @param {import('./m-select.js').MSelect} control
  */
 export function chipMode(control) {
@@ -364,6 +366,21 @@ export function chipMode(control) {
   };
 
   return {
+    /**
+     * Escape comes back here while the Current Item still has a Chip to stand
+     * on, and drops to Filter mode when it does not: chip navigation cannot
+     * resume on an unselected Item, and Filter mode makes the Filter editable
+     * and clears the marker. Enter still returns here, where the Chip rule
+     * settles the marker after the toggle.
+     * @param {string} key
+     */
+    onDropDownLeave: (key) => {
+      if (key === 'Escape' && !control.dropDown.currentItem?.selected) {
+        control.switchMode(MODES.FILTER);
+        return;
+      }
+      control.switchMode(MODES.CHIP);
+    },
     handlers: {
       ArrowLeft: () => {
         const index = currentIndex();
@@ -472,9 +489,10 @@ export function collapsedMode(control) {
     /**
      * How this mode is left by the DropDown it handed the keyboard to. It is
      * registered here rather than branched on at the closing key, because it is
-     * this origin's rule and belongs beside the rest of its behaviour. No other
-     * origin has one: a DropDown opened from Filter or Chip mode returns there as
-     * it was, marker and all.
+     * this origin's rule and belongs beside the rest of its behaviour. Filter
+     * mode has none — a DropDown opened from it returns there as it was, marker
+     * and all — and Chip mode uses its own only to leave chip navigation on
+     * Escape.
      *
      * - `Escape` drops to Filter mode instead of coming back here. Escape commits
      *   nothing, and the restriction exists only so a selection the Collapsed Chip

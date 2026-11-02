@@ -632,8 +632,9 @@ describe('1. MSelect — Keyboard over the Chips', () => {
   });
 
   // requires: Escape handling in every mode (closes the DropDown), in DropDown
-  // mode also returning to the previous mode; public MSelect#changeToPrevious
-  // with its no-previous fallback to Filter
+  // mode also returning to the previous mode except when leaving Chip or
+  // Collapsed mode for Filter; public MSelect#changeToPrevious with its
+  // no-previous fallback to Filter
   describe('29. Keyboard - Escape closes the DropDown in every mode', () => {
     const setup = () => {
       const host = document.createElement('div');
@@ -766,6 +767,48 @@ describe('1. MSelect — Keyboard over the Chips', () => {
       expect(handled.value).toBe(true);
       expect(filter.query).toBe('');
       expect(control.dropDown.currentItem).toBe(control.items[2]);
+    });
+
+    it('1.29.9 Escape in DropDown mode entered from Chip mode with a selected Current returns to Chip and keeps the marker', () => {
+      const control = setup();
+      const filter = control.selectionBox.filter;
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      keydown(filter.el, 'ArrowLeft');
+      keydown(filter.el, 'ArrowDown');
+      keydown(filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+
+      const handled = keydown(filter.el, 'Escape');
+
+      expect(handled.value).toBe(true);
+      expect(modes(control).mode).toBe('chip');
+      expect(control.dropDown.open).toBe(false);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(filter.el.readOnly).toBe(true);
+    });
+
+    it('1.29.10 Escape in DropDown mode entered from Chip mode with an unselected Current returns to Filter and clears the marker', () => {
+      const control = setup();
+      const filter = control.selectionBox.filter;
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      keydown(filter.el, 'ArrowLeft');
+      keydown(filter.el, 'ArrowDown');
+      keydown(filter.el, 'ArrowDown');
+      keydown(filter.el, 'ArrowDown');
+      expect(modes(control).mode).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(control.items[2].selected).toBe(false);
+
+      const handled = keydown(filter.el, 'Escape');
+
+      expect(handled.value).toBe(true);
+      expect(modes(control).mode).toBe('filter');
+      expect(control.dropDown.open).toBe(false);
+      expect(control.dropDown.currentItem).toBeNull();
+      expect(filter.el.readOnly).toBe(false);
     });
 
     it('1.29.5 changeToPrevious without a recorded previous mode falls back to Filter and logs a warning', () => {

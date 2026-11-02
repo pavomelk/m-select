@@ -859,7 +859,7 @@ describe('1. MSelect — Selection, form and events', () => {
       expect(prevented.value).toBe(false);
     });
 
-    it('1.47.4 Escape out of a DropDown entered from Chip mode keeps the Filter read-only and focused', () => {
+    it('1.47.4 Escape out of a DropDown entered from Chip mode with a selected Current returns to Chip, keeping the Filter read-only and focused', () => {
       const control = setup();
       const el = focusFilter(control);
       control.items[0].toggle(true);
@@ -870,11 +870,36 @@ describe('1. MSelect — Selection, form and events', () => {
       keydown(el, 'ArrowDown');
       keydown(el, 'ArrowDown');
       expect(mode(control)).toBe('dropdown');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
 
       keydown(el, 'Escape');
 
       expect(mode(control)).toBe('chip');
+      expect(control.dropDown.open).toBe(false);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
       expect(el.readOnly).toBe(true);
+      expect(document.activeElement).toBe(el);
+    });
+
+    it('1.47.8 Escape out of a DropDown entered from Chip mode with an unselected Current returns to an editable, focused Filter', () => {
+      const control = setup();
+      const el = focusFilter(control);
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      keydown(el, 'ArrowLeft');
+      keydown(el, 'ArrowDown');
+      keydown(el, 'ArrowDown');
+      expect(mode(control)).toBe('dropdown');
+      keydown(el, 'ArrowDown');
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(control.items[2].selected).toBe(false);
+
+      keydown(el, 'Escape');
+
+      expect(mode(control)).toBe('filter');
+      expect(control.dropDown.open).toBe(false);
+      expect(control.dropDown.currentItem).toBeNull();
+      expect(el.readOnly).toBe(false);
       expect(document.activeElement).toBe(el);
     });
 
