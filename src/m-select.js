@@ -2547,6 +2547,13 @@ export class MSelect {
   /** @private guard so destroy() runs its teardown once */
   #destroyed = false;
 
+  /**
+   * @private true while leaveDropDown() moves the focus onto the Filter itself,
+   * so the resulting focus event does not enter Filter mode behind the mode the
+   * key is actually landing in.
+   */
+  #suppressFilterFocus = false;
+
   /** @private Whether the Item tree was already instantiated (setItems one-time). */
   #itemsLoaded = false;
 
@@ -2684,10 +2691,12 @@ export class MSelect {
     return;
   }
 
-  /** Focus on the Filter means entering the default Filter mode.
+  /** Focus on the Filter means entering the default Filter mode, except while
+   * leaveDropDown() is restoring the focus for the mode the closing key chose.
    * @fires CmItemsRequestEvent on first focus while the component is empty
    */
   onFilterFocus() {
+    if (this.#suppressFilterFocus) return;
     this.#activateFilter();
     this.requestItems();
   }
@@ -2826,7 +2835,22 @@ export class MSelect {
     // the caret is editable belongs to the mode the key lands in, whose entry
     // hook owns it: returning to Filter mode re-enables it, returning to Chip
     // mode leaves the input read-only, which is what that mode navigates by.
-    if (key === 'Escape') this.selectionBox.filter.setCaretState({ focused: true });
+    //
+    // The focus is moved before the mode is settled, so a Control the user
+    // reached without the Filter focused (a mouse-opened Chip, or a page with
+    // several Controls) still ends in the mode the key names. The focus event
+    // is silenced for the duration: entering Filter mode is `onFilterFocus`'s
+    // job when the *user* focuses the input, but here it would switch the mode
+    // before the origin has answered, and the origin would then be recorded as
+    // DropDown itself instead of Chip.
+    if (key === 'Escape') {
+      this.#suppressFilterFocus = true;
+      try {
+        this.selectionBox.filter.setCaretState({ focused: true });
+      } finally {
+        this.#suppressFilterFocus = false;
+      }
+    }
     if (!this.#modes.leaveDropDown(key)) this.changeToPrevious();
   }
 
