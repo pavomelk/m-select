@@ -1493,7 +1493,7 @@ export class Item {
     if (changed(VIEW_HIDDEN)) this.#applyHidden(hidden);
     if (changed(VIEW_SELECTED)) li.classList.toggle('cm-item--selected', selected);
     if (changed(VIEW_PARTIAL)) li.classList.toggle('cm-item--partial', partial);
-    if (changed(VIEW_TICKED) && this.tickEl) {
+    if ((changed(VIEW_TICKED) || changed(VIEW_PARTIAL)) && this.tickEl) {
       this.tickEl.classList.toggle('cm-item__tick--partial', partial);
       this.tickEl.textContent = ticked ? '\u2713' : '';
     }
