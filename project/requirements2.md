@@ -126,6 +126,7 @@
 - [ ] `REQ-3.8-05` Clicking an *Item* toggles its selection — the same single action as its *Chip* (REQ-3.5-01) — and marks it *Current*. *(P0)*
 - [ ] `REQ-3.8-06` The *Drop Down* offers a *Select All* button that toggles the selection of the *visible* selectable *Leaf Items* only, a *Group Item* being a container rather than a selected unit (REQ-3.3-04): when any of them is selected it unselects them, otherwise it selects them; *Hidden* (filtered-out) *Items* are left untouched, *Chips* always mirror the resulting selection, and the action clears the *Filter* query, as committing a single *Item* with `Enter` does (REQ-3.11-18). *(P0)*
 - [ ] `REQ-3.8-07` The *Select All* button appears only while the *Filter* query is active (non-empty text) **and** more than one selectable *Leaf Item* is visible; a query leaving a single result — or none — hides it, since bulk-selecting would merely repeat that one *Item*'s toggle (or do nothing at all). Clearing the query hides it again. *(P0)*
+- [ ] `REQ-3.8-08` In *DropDown mode*, while the *Select All* button is visible (REQ-3.8-07), `Ctrl-A` performs the same *Select All* action (REQ-3.8-06), including clearing the query. With the button hidden — no active query, or fewer than two visible selectable *Leaf Items* — the key is left to the browser, and outside *DropDown mode* it is not a *Control* shortcut. *(P1)*
 
 ### 3.9 Filter
 - [ ] `REQ-3.9-01` Editable element that allows text input. *(P0)*

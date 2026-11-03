@@ -652,4 +652,77 @@ describe('1. MSelect — Keyboard in the DropDown', () => {
       expect(prevented.value).toBe(true);
     });
   });
+
+  // requires: Ctrl-A is the Select All action, live only in DropDown mode and
+  // only while the Select All button is visible
+  describe('50. Keyboard - Ctrl-A performs Select All in DropDown mode', () => {
+    const setup = () => {
+      const host = document.createElement('div');
+      return new MSelect(host, {
+        items: [
+          { value: 'a', label: 'Alpha' },
+          { value: 'b', label: 'Bravo' },
+          { value: 'c', label: 'Charlie' },
+        ],
+      });
+    };
+    const modes = (control) => control[MSELECT_INTERNALS].modes.mode;
+    const key = (control, keyName, extra = {}) => {
+      const prevented = { value: false };
+      control.selectionBox.filter.el.dispatchEvent({
+        type: 'keydown',
+        key: keyName,
+        target: control.selectionBox.filter.el,
+        ...extra,
+        preventDefault() {
+          prevented.value = true;
+        },
+      });
+      return prevented;
+    };
+
+    it('1.50.1 with the Select All button visible, Ctrl-A selects the visible Items and nothing hidden', () => {
+      const control = setup();
+      control.selectionBox.filter.query = 'r';
+      key(control, 'ArrowDown');
+      expect(modes(control)).toBe('dropdown');
+      expect(control.dropDown.showSelectAllButton).toBe(true);
+      expect(control.items[0].visible).toBe(false);
+
+      const prevented = key(control, 'a', { ctrlKey: true });
+
+      expect(prevented.value).toBe(true);
+      expect(control.items[0].selected).toBe(false);
+      expect(control.items[1].selected).toBe(true);
+      expect(control.items[2].selected).toBe(true);
+      expect(control.selectionBox.filter.query).toBe('');
+      expect(control.dropDown.showSelectAllButton).toBe(false);
+      expect(modes(control)).toBe('dropdown');
+      expect(control.dropDown.open).toBe(true);
+    });
+
+    it('1.50.2 with the Select All button hidden, Ctrl-A is left to the browser', () => {
+      const control = setup();
+      key(control, 'ArrowDown');
+      expect(modes(control)).toBe('dropdown');
+      expect(control.dropDown.showSelectAllButton).toBe(false);
+
+      const prevented = key(control, 'a', { ctrlKey: true });
+
+      expect(prevented.value).toBe(false);
+      expect(control.selectionBox.items).toHaveLength(0);
+    });
+
+    it('1.50.3 Ctrl-A outside DropDown mode is left to the browser even with the button visible', () => {
+      const control = setup();
+      control.selectionBox.filter.query = 'r';
+      expect(modes(control)).toBe('filter');
+      expect(control.dropDown.showSelectAllButton).toBe(true);
+
+      const prevented = key(control, 'a', { ctrlKey: true });
+
+      expect(prevented.value).toBe(false);
+      expect(control.selectionBox.items).toHaveLength(0);
+    });
+  });
 });

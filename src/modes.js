@@ -316,6 +316,18 @@ export function dropdownMode(control) {
        * single Tab stop promises.
        */
       Tab: () => true,
+      /**
+       * Ctrl-A is the Select All action, but only where that action is offered:
+       * the button is shown while a query leaves more than one visible Item, and
+       * the same condition is what makes the shortcut live. With no button there
+       * is nothing to bulk-select, so the key falls through to the browser.
+       * @param {KeyboardEvent} event
+       */
+      a: (event) => {
+        if (!event?.ctrlKey || !control.dropDown.showSelectAllButton) return false;
+        control.toggleAll();
+        return true;
+      },
       ArrowDown: move,
       ArrowUp: move,
       ArrowRight: move,
