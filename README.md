@@ -140,7 +140,7 @@ Full component API with access to internals.
 | `get selectedItems()` | Currently selected Item objects |
 | `get mode` / `set mode` | Get/set input mode |
 | `setItems(specs, selectedValues?)` | One-time tree instantiation (throws if called twice) |
-| `clearAll()` / `toggleAll()` | Bulk selection operations |
+| `clearAll()` / `toggleAll()` | Deselect all / add all visible Items to the selection |
 | `render()` | Re-render dropdown and selection box |
 | `destroy()` | Remove control from DOM |
 | `emit(type, detail)` | Dispatch custom event on control root |

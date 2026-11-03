@@ -3658,9 +3658,11 @@ export class MSelect {
   }
 
   toggleAll() {
-    this.logger.info('toggle all');
+    this.logger.info('select all');
     this.requestItems();
-    this.#inBatch(() => this.dropDown.items.toggle());
+    // Additive: already-selected visible Items stay selected; the action only
+    // adds the rest, and hidden Items are outside its reach.
+    this.#inBatch(() => this.dropDown.items.toggle(true));
     // Clearing the query re-filters, which renders the list; only the Chips and
     // the form mirror are left for this to bring up to date.
     this.selectionBox.filter.query = '';

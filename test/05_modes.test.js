@@ -67,25 +67,25 @@ describe('1. MSelect — Modes', () => {
       expect(control.selectionBox.items.map((i) => i.value).sort()).toEqual(['a', 'b', 'c']);
     });
 
-    it('1.12.5 toggling select-all again with everything selected unselects all and removes every chip', () => {
+    it('1.12.5 selecting all again with everything selected changes nothing', () => {
       const control = triple();
       control.toggleAll();
 
       control.toggleAll();
 
-      expect(states(control)).toEqual([false, false, false]);
-      expect(control.selectionBox.items).toHaveLength(0);
+      expect(states(control)).toEqual([true, true, true]);
+      expect(control.selectionBox.items).toHaveLength(3);
     });
 
-    it('1.12.6 a manually picked Item is not exempt: select-all unselects it and later reselects it with the rest', () => {
+    it('1.12.6 a manually picked Item stays selected while select-all adds the rest', () => {
       const control = triple();
       control.items[0].toggle();
       expect(control.selectionBox.items.map((i) => i.value)).toEqual(['a']);
 
       control.toggleAll();
 
-      expect(states(control)).toEqual([false, false, false]);
-      expect(control.selectionBox.items).toHaveLength(0);
+      expect(states(control)).toEqual([true, true, true]);
+      expect(control.selectionBox.items.map((i) => i.value).sort()).toEqual(['a', 'b', 'c']);
 
       control.toggleAll();
 
@@ -93,7 +93,7 @@ describe('1. MSelect — Modes', () => {
       expect(control.selectionBox.items.map((i) => i.value).sort()).toEqual(['a', 'b', 'c']);
     });
 
-    it('1.12.7 toggling all over a value-bearing Group selects its descendants, the Group itself never becoming a selection of its own', () => {
+    it('1.12.7 selecting all over a value-bearing Group selects its descendants and keeps them selected on a second pass', () => {
       const host = document.createElement('div');
       const control = new MSelect(host, {
         items: [
@@ -117,9 +117,9 @@ describe('1. MSelect — Modes', () => {
 
       control.toggleAll();
 
-      expect(group.selectionState).toBe('none');
-      expect(group.selected).toBe(false);
-      expect(control.selectionBox.items).toHaveLength(0);
+      expect(group.selectionState).toBe('all');
+      expect(group.selected).toBe(true);
+      expect(control.selectionBox.items.map((i) => i.value).sort()).toEqual(['a', 'b']);
     });
 
     it('1.12.8 RootContainer.toggle mirrors Item.toggle: an explicit state forces that outcome', () => {
@@ -162,7 +162,7 @@ describe('1. MSelect — Modes', () => {
       expect(control.selectionBox.items.map((i) => i.value)).toEqual(['a']);
     });
 
-    it('1.12.11 with a filter active, toggling all leaves hidden Items exactly as they are', () => {
+    it('1.12.11 with a filter active, selecting all leaves hidden Items and earlier selections exactly as they are', () => {
       const control = triple();
       control.items[2].toggle();
       control.selectionBox.filter.query = 'al';
@@ -176,8 +176,8 @@ describe('1. MSelect — Modes', () => {
       control.selectionBox.filter.query = 'al';
       control.toggleAll();
 
-      expect(states(control)).toEqual([false, false, true]);
-      expect(control.selectionBox.items.map((i) => i.value)).toEqual(['c']);
+      expect(states(control)).toEqual([true, false, true]);
+      expect(control.selectionBox.items.map((i) => i.value).sort()).toEqual(['a', 'c']);
     });
 
     it('1.12.12 RootContainer.toggle forces the state on the visible Items only', () => {
@@ -242,6 +242,18 @@ describe('1. MSelect — Modes', () => {
       control.selectionBox.filter.query = '';
 
       expect(control.dropDown.toolbarEl.style.display).toBe('none');
+    });
+
+    it('1.12.18 clicking Select All adds the visible Items and keeps those already selected', () => {
+      const control = triple();
+      control.items[1].toggle();
+      control.selectionBox.filter.query = 'r';
+      expect(states(control)).toEqual([false, true, false]);
+
+      control.dropDown.selectAllBtn.click();
+
+      expect(states(control)).toEqual([false, true, true]);
+      expect(control.selectionBox.items.map((i) => i.value).sort()).toEqual(['b', 'c']);
     });
   });
 
