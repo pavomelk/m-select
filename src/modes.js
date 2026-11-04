@@ -93,6 +93,11 @@ const startMarker = (control) => {
  *   to Filter mode. With no Current Item it selects nothing and still closes;
  *   the key is always consumed, so it cannot submit an enclosing form.
  *
+ * - Alt-A performs Select All while that action is offered: the button is shown
+ *   while a query leaves more than one visible Item, and the same condition is
+ *   what makes the shortcut live. With no button there is nothing to bulk-select,
+ *   so the key falls through to the browser.
+ *
  * - Backspace behaves like text-editing insert mode and only takes over when
  *   the caret sits at the text's leftmost position (nothing left to delete in
  *   the Filter): it then unselects the rightmost Chip, staying in Filter mode.
@@ -134,6 +139,18 @@ export function filterMode(control) {
       Enter: () => {
         control.switchMode(MODES.DROPDOWN);
         return REDISPATCH;
+      },
+      /**
+       * Alt-A is the Select All action, but only where that action is offered:
+       * the button is shown while a query leaves more than one visible Item, and
+       * the same condition is what makes the shortcut live. With no button there
+       * is nothing to bulk-select, so the key falls through to the browser.
+       * @param {KeyboardEvent} event
+       */
+      a: (event) => {
+        if (!event?.altKey || !control.dropDown.showSelectAllButton) return false;
+        control.toggleAll();
+        return true;
       },
       ArrowLeft: () => {
         if (control.selectionBox.filter.query !== '') return false;

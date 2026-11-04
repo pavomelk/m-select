@@ -140,7 +140,7 @@ Full component API with access to internals.
 | `get selectedItems()` | Currently selected Item objects |
 | `get mode` / `set mode` | Get/set input mode |
 | `setItems(specs, selectedValues?)` | One-time tree instantiation (throws if called twice) |
-| `clearAll()` / `toggleAll()` | Bulk selection operations |
+| `clearAll()` / `toggleAll()` | Deselect all / add all visible Items to the selection |
 | `render()` | Re-render dropdown and selection box |
 | `destroy()` | Remove control from DOM |
 | `emit(type, detail)` | Dispatch custom event on control root |
@@ -156,10 +156,26 @@ Full component API with access to internals.
 | `chipPlaceOrder` | `'unsorted'\|'asDefined'\|'alphabetical'` | `'unsorted'` | Chip ordering strategy |
 | `logLevel` | `'silent'\|'error'\|'warn'\|'info'\|'debug'` | `'warn'` | Logging verbosity |
 | `delayedLoad` | `boolean` | `false` | Defer item instantiation until `setItems()` called |
-| `align` | `object` | — | Per-depth layout: `{ depth: { flow: 'row'\|'column' } \| 'row'\|'column' }` |
+| `align` | `object` | — | Layout per hierarchy depth (0 = top level): `'row'`/`'column'`, or `{ flow }` |
 | `groupItems.toggleScope` | `'visible'\|'all'` | `'visible'` | What a group toggle affects |
 | `groupItems.filterScope` | `'matching'\|'all'` | `'matching'` | What remains visible when group label matches filter |
 | `filterFn` | `(item, query) => boolean` | — | Custom matcher replacing the built-in label match |
+
+### Layout per level
+
+`align` sets the flow for each hierarchy depth. Depths are zero-based: `0` is the top-level item list, `1` is the children of a top-level group, and so on. Unlisted depths lay out in a column. Row levels are navigated with `ArrowLeft`/`ArrowRight`; columns use `ArrowUp`/`ArrowDown`.
+
+```js
+const facade = new MSelectFacade(host, {
+  items,
+  options: {
+    align: {
+      1: 'row', // group children in a row
+      2: { flow: 'row' }, // and their children too
+    },
+  },
+});
+```
 
 ### Custom filtering
 
@@ -238,7 +254,7 @@ The control maintains a single tab stop (the Filter input). Navigation uses mode
 
 | Mode | Key Behaviors |
 |---|---|
-| **Filter** | Type to filter; every query change moves the Current marker to the first selectable match (a group header is skipped, and a query matching nothing clears the marker). `ArrowDown` opens dropdown and navigates. `ArrowLeft` on empty query enters Chip/Collapsed mode. `Backspace` at start removes rightmost chip. `Enter` toggles current item and clears filter. `Escape` closes an open dropdown; pressed again with it closed, it clears the query. |
+| **Filter** | Type to filter; every query change moves the Current marker to the first selectable match (a group header is skipped, and a query matching nothing clears the marker). `ArrowDown` opens dropdown and navigates. `ArrowLeft` on empty query enters Chip/Collapsed mode. `Backspace` at start removes rightmost chip. `Enter` toggles current item and clears filter. `Alt-A` performs Select All while that button is visible. `Escape` closes an open dropdown; pressed again with it closed, it clears the query. |
 | **Dropdown** | `ArrowUp/Down/Left/Right` navigate hierarchy (direction depends on level layout). `Home/End/PageUp/PageDown` move within level. `Space` toggles current item (stays open). `Enter` toggles and closes dropdown. `Escape` closes and returns to the previous mode; from Chip mode it returns to Filter when the current item is not selected, and from Collapsed mode it always returns to Filter. |
 | **Chip** | `ArrowLeft/Right` navigate chips. `Delete`/`Backspace` remove chips. `ArrowDown` opens dropdown. `ArrowRight` at end returns to Filter. |
 | **Collapsed** | Navigate collapsed summary. `ArrowDown` opens restricted dropdown of selected items. `ArrowRight` returns to Filter. |

@@ -1219,5 +1219,35 @@ expect(walks).toBe(0);
       expect(group.visibleSelectableCount).toBe(start);
       expect(group.recountVisibility().visibleSelectable).toBe(start);
     });
+
+    it('1.7.29 a Group tick loses its partial treatment when its last unselected child is selected', () => {
+      const host = document.createElement('div');
+      const control = new MSelect(host, {
+        items: [
+          {
+            label: 'Group',
+            items: [
+              { value: 'a', label: 'Alpha' },
+              { value: 'b', label: 'Beta' },
+            ],
+          },
+        ],
+      });
+      const group = control.items[0];
+
+      group[0].toggle(true);
+
+      expect(group.selectionState).toBe('partial');
+      expect(group.tickEl.classList.contains('cm-item__tick--partial')).toBe(true);
+      expect(group.itemView.classList.contains('cm-item--partial')).toBe(true);
+
+      group[1].toggle(true);
+
+      expect(group.selectionState).toBe('all');
+      expect(group.tickEl.classList.contains('cm-item__tick--partial')).toBe(false);
+      expect(group.tickEl.textContent).toBe('\u2713');
+      expect(group.itemView.classList.contains('cm-item--partial')).toBe(false);
+      expect(group.itemView.classList.contains('cm-item--selected')).toBe(true);
+    });
   });
 });

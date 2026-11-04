@@ -819,6 +819,17 @@ describe('1. MSelect — Selection, form and events', () => {
       control.selectionBox.filter.el.dispatchEvent({ type: 'focus' });
       return control.selectionBox.filter.el;
     };
+    // The real DOM fires a synchronous focus event from `focus()`, which the
+    // component answers in `onFilterFocus`. Focus away from the Filter first,
+    // then let the programmatic refocus run that event, as a browser would.
+    const blurWithBrowserFocusEvent = (el) => {
+      el.focus = () => {
+        document.activeElement = el;
+        el.focused = true;
+        el.dispatchEvent({ type: 'focus', target: el });
+      };
+      el.blur();
+    };
 
     it('1.47.1 Tab in DropDown mode is consumed, leaving the focus on the Filter', () => {
       const control = setup();
@@ -900,6 +911,51 @@ describe('1. MSelect — Selection, form and events', () => {
       expect(control.dropDown.open).toBe(false);
       expect(control.dropDown.currentItem).toBeNull();
       expect(el.readOnly).toBe(false);
+      expect(document.activeElement).toBe(el);
+    });
+
+    it('1.47.9 Escape with an unselected Current restores the Filter focus even when the refocus fires a real focus event', () => {
+      const control = setup();
+      const el = focusFilter(control);
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      keydown(el, 'ArrowLeft');
+      keydown(el, 'ArrowDown');
+      keydown(el, 'ArrowDown');
+      keydown(el, 'ArrowDown');
+      expect(control.dropDown.currentItem).toBe(control.items[2]);
+      expect(control.items[2].selected).toBe(false);
+
+      blurWithBrowserFocusEvent(el);
+      expect(document.activeElement).not.toBe(el);
+
+      keydown(document.body, 'Escape');
+
+      expect(mode(control)).toBe('filter');
+      expect(control.dropDown.open).toBe(false);
+      expect(el.readOnly).toBe(false);
+      expect(document.activeElement).toBe(el);
+    });
+
+    it('1.47.10 Escape with a selected Current restores focus without the focus event forcing Filter mode over Chip', () => {
+      const control = setup();
+      const el = focusFilter(control);
+      control.items[0].toggle(true);
+      control.items[1].toggle(true);
+      keydown(el, 'ArrowLeft');
+      keydown(el, 'ArrowDown');
+      keydown(el, 'ArrowDown');
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+
+      blurWithBrowserFocusEvent(el);
+      expect(document.activeElement).not.toBe(el);
+
+      keydown(document.body, 'Escape');
+
+      expect(mode(control)).toBe('chip');
+      expect(control.dropDown.open).toBe(false);
+      expect(control.dropDown.currentItem).toBe(control.items[1]);
+      expect(el.readOnly).toBe(true);
       expect(document.activeElement).toBe(el);
     });
 
