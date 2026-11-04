@@ -57,6 +57,20 @@ describe('1. MSelect — Modes', () => {
       });
     };
     const states = (control) => [...control.items].map((i) => i.selected);
+    const modes = (control) => control[MSELECT_INTERNALS].modes.mode;
+    const key = (control, keyName, extra = {}) => {
+      const prevented = { value: false };
+      control.selectionBox.filter.el.dispatchEvent({
+        type: 'keydown',
+        key: keyName,
+        target: control.selectionBox.filter.el,
+        ...extra,
+        preventDefault() {
+          prevented.value = true;
+        },
+      });
+      return prevented;
+    };
 
     it('1.12.4 toggling select-all with nothing selected selects every selectable Item and shows a chip for each', () => {
       const control = triple();
@@ -254,6 +268,56 @@ describe('1. MSelect — Modes', () => {
 
       expect(states(control)).toEqual([false, true, true]);
       expect(control.selectionBox.items.map((i) => i.value).sort()).toEqual(['b', 'c']);
+    });
+
+    it('1.12.19 Alt-A in Filter mode performs Select All while the button is visible', () => {
+      const control = triple();
+      control.selectionBox.filter.query = 'r';
+      expect(modes(control)).toBe('filter');
+      expect(control.dropDown.showSelectAllButton).toBe(true);
+
+      const prevented = key(control, 'a', { altKey: true });
+
+      expect(prevented.value).toBe(true);
+      expect(states(control)).toEqual([false, true, true]);
+      expect(control.selectionBox.filter.query).toBe('');
+      expect(control.dropDown.showSelectAllButton).toBe(false);
+      expect(modes(control)).toBe('filter');
+    });
+
+    it('1.12.20 Alt-A in Filter mode with the button hidden is left to the browser', () => {
+      const control = triple();
+      expect(control.dropDown.showSelectAllButton).toBe(false);
+
+      const prevented = key(control, 'a', { altKey: true });
+
+      expect(prevented.value).toBe(false);
+      expect(control.selectionBox.items).toHaveLength(0);
+    });
+
+    it('1.12.21 Ctrl-A in Filter mode does not perform Select All', () => {
+      const control = triple();
+      control.selectionBox.filter.query = 'r';
+
+      const prevented = key(control, 'a', { ctrlKey: true });
+
+      expect(prevented.value).toBe(false);
+      expect(control.selectionBox.items).toHaveLength(0);
+      expect(control.selectionBox.filter.query).toBe('r');
+    });
+
+    it('1.12.22 Alt-A in DropDown mode does not perform Select All', () => {
+      const control = triple();
+      control.selectionBox.filter.query = 'r';
+      key(control, 'ArrowDown');
+      expect(modes(control)).toBe('dropdown');
+      expect(control.dropDown.showSelectAllButton).toBe(true);
+
+      const prevented = key(control, 'a', { altKey: true });
+
+      expect(prevented.value).toBe(false);
+      expect(control.selectionBox.items).toHaveLength(0);
+      expect(modes(control)).toBe('dropdown');
     });
   });
 
